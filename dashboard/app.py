@@ -379,6 +379,56 @@ def api_predict():
         return jsonify({"success": False, "error": f"Error al predecir: {str(e)}"}), 500
 
 
+@app.route("/api/predict-day")
+def api_predict_day():
+    if not estado_ml["entrenado"]:
+        return jsonify({"success": False, "error": estado_ml["error"] or "El modelo predictivo no está listo."}), 400
+
+    try:
+        dia_semana = int(request.args.get("dia_semana", datetime.now().weekday()))
+        mes = int(request.args.get("mes", datetime.now().month))
+        semana_anio = int(request.args.get("semana_anio", datetime.now().isocalendar()[1]))
+
+        import numpy as np
+        # Generar las 24 horas del día (0 a 23)
+        horas = np.arange(24)
+        # Crear inputs: shape (24, 4) -> [hora, dia_semana, mes, semana_anio]
+        X_in = np.column_stack([
+            horas,
+            np.full(24, dia_semana),
+            np.full(24, mes),
+            np.full(24, semana_anio)
+        ])
+
+        rf_model = estado_ml["modelo_rf"]
+        preds_rf = rf_model.predict(X_in).tolist()
+
+        lr_model = estado_ml["modelo_lr"]
+        scaler = estado_ml["scaler"]
+        X_in_s = scaler.transform(X_in)
+        preds_lr = lr_model.predict(X_in_s).tolist()
+
+        # Redondear predicciones
+        preds_rf = [round(float(p), 2) for p in preds_rf]
+        preds_lr = [round(float(p), 2) for p in preds_lr]
+
+        return jsonify({
+            "success": True,
+            "inputs": {
+                "dia_semana": dia_semana,
+                "mes": mes,
+                "semana_anio": semana_anio
+            },
+            "horas": horas.tolist(),
+            "predicciones": {
+                "random_forest": preds_rf,
+                "regresion_lineal": preds_lr
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error al predecir el día: {str(e)}"}), 500
+
+
 # Iniciar entrenamiento de ML en segundo plano al arrancar la app Flask
 threading.Thread(target=entrenar_modelos_ml, daemon=True).start()
 
@@ -745,6 +795,16 @@ h1 i { color: var(--amber); }
       </div>
     </div>
   </div>
+
+  <!-- Nuevo Panel: Gráfico 24h de Variación -->
+  <div class="row r2" style="margin-top: 24px;" id="ml-chart-container">
+    <div class="panel" style="flex: 1; width: 100%;">
+      <h2><i class="fa-solid fa-chart-line" style="color:var(--amber)"></i> Curva de Temperatura Estimada para el Día Seleccionado (24h)</h2>
+      <div style="position: relative; height: 220px; width: 100%;">
+        <canvas id="chart-ml-24h"></canvas>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -763,14 +823,81 @@ function switchTab(tab) {
   }
 }
 
+let cML24hLine = null;
+let cachePredicciones = null;
+
+function initMLChart() {
+  const ctx = document.getElementById('chart-ml-24h');
+  if (!ctx) return;
+  
+  cML24hLine = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: Array.from({length: 24}, (_, i) => `${i}:00h`),
+      datasets: [
+        {
+          label: 'Random Forest',
+          data: [],
+          borderColor: '#a855f7', // purple
+          backgroundColor: 'rgba(168, 85, 247, 0.1)',
+          fill: true,
+          tension: 0.4,
+          borderWidth: 3,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#a855f7'
+        },
+        {
+          label: 'Regresión Lineal',
+          data: [],
+          borderColor: '#3b82f6', // blue
+          backgroundColor: 'transparent',
+          borderDash: [5, 5],
+          tension: 0.15,
+          borderWidth: 2,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          pointBackgroundColor: '#3b82f6'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: '#94a3b8' }
+        },
+        y: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: '#94a3b8' },
+          title: { display: true, text: 'Temperatura (°C)', color: '#94a3b8' }
+        }
+      },
+      plugins: {
+        legend: { labels: { color: '#f8fafc' } },
+        tooltip: {
+          mode: 'index',
+          intersect: false
+        }
+      }
+    }
+  });
+}
+
 // Configurar fecha de hoy en el input por defecto
 document.addEventListener("DOMContentLoaded", () => {
   const today = new Date().toISOString().split('T')[0];
   const dateInput = document.getElementById('param-fecha');
   if (dateInput) {
     dateInput.value = today;
-    dateInput.addEventListener('change', () => debounceCalcular());
+    dateInput.addEventListener('change', () => {
+      cachePredicciones = null; // Invalida caché si cambia la fecha
+      debounceCalcular();
+    });
   }
+  initMLChart();
 });
 
 function updLbl(id, val) {
@@ -802,14 +929,17 @@ function cargarMLInfo() {
     .then(d => {
       const alertDiv = document.getElementById('ml-alert-insuficiente');
       const visualDiv = document.getElementById('ml-visualizacion-grupo');
+      const chartContainer = document.getElementById('ml-chart-container');
       
       if (!d.entrenado) {
         alertDiv.style.display = 'block';
         document.getElementById('ml-alert-msg').textContent = d.error || 'Datos insuficientes.';
         visualDiv.style.display = 'none';
+        if (chartContainer) chartContainer.style.display = 'none';
       } else {
         alertDiv.style.display = 'none';
         visualDiv.style.display = 'block';
+        if (chartContainer) chartContainer.style.display = 'block';
         
         // Cargar métricas
         document.getElementById('metric-mae-rf').textContent = d.mae_rf + ' °C';
@@ -857,12 +987,7 @@ function calcularPrediccion(silencioso = false) {
   const alertDiv = document.getElementById('ml-alert-insuficiente');
   if (alertDiv.style.display === 'block') return; // Si no hay datos suficientes, no calcula
 
-  if (!silencioso) {
-    document.getElementById('ml-loading-txt').textContent = 'Calculando estimación...';
-    loading.style.display = 'flex';
-  }
-
-  const hora = document.getElementById('param-hora').value;
+  const hora = parseInt(document.getElementById('param-hora').value);
   const rawDate = document.getElementById('param-fecha').value;
   
   if (!rawDate) {
@@ -878,12 +1003,48 @@ function calcularPrediccion(silencioso = false) {
   const diaSemana = (dateObj.getDay() + 6) % 7; // Lunes 0, Domingo 6
   const semanaAnio = getWeekNumber(dateObj);
 
-  fetch(`/api/predict?hora_dia=${hora}&dia_semana=${diaSemana}&mes=${mes}&semana_anio=${semanaAnio}`)
+  // Clave única de caché para el día seleccionado
+  const cacheKey = `${diaSemana}-${mes}-${semanaAnio}`;
+
+  if (cachePredicciones && cachePredicciones.key === cacheKey) {
+    // Usar datos ya cargados en caché (evita peticiones de red al arrastrar el slider de hora)
+    const predsRF = cachePredicciones.rf;
+    const predsLR = cachePredicciones.lr;
+    
+    document.getElementById('pred-val-rf').textContent = predsRF[hora].toFixed(1) + ' °C';
+    document.getElementById('pred-val-lr').textContent = predsLR[hora].toFixed(1) + ' °C';
+    return;
+  }
+
+  if (!silencioso) {
+    document.getElementById('ml-loading-txt').textContent = 'Calculando curva de estimación...';
+    loading.style.display = 'flex';
+  }
+
+  fetch(`/api/predict-day?dia_semana=${diaSemana}&mes=${mes}&semana_anio=${semanaAnio}`)
     .then(r => r.json())
     .then(d => {
       if (d.success) {
-        document.getElementById('pred-val-rf').textContent = d.predicciones.random_forest.toFixed(1) + ' °C';
-        document.getElementById('pred-val-lr').textContent = d.predicciones.regresion_lineal.toFixed(1) + ' °C';
+        const predsRF = d.predicciones.random_forest;
+        const predsLR = d.predicciones.regresion_lineal;
+        
+        // Guardar en caché
+        cachePredicciones = {
+          key: cacheKey,
+          rf: predsRF,
+          lr: predsLR
+        };
+
+        // Actualizar gráfico de líneas
+        if (cML24hLine) {
+          cML24hLine.data.datasets[0].data = predsRF;
+          cML24hLine.data.datasets[1].data = predsLR;
+          cML24hLine.update();
+        }
+
+        // Actualizar tarjetas de predicción para la hora seleccionada
+        document.getElementById('pred-val-rf').textContent = predsRF[hora].toFixed(1) + ' °C';
+        document.getElementById('pred-val-lr').textContent = predsLR[hora].toFixed(1) + ' °C';
       }
     })
     .finally(() => {
@@ -905,6 +1066,7 @@ function reentrenarML() {
     .then(r => r.json())
     .then(d => {
       if (d.entrenado) {
+        cachePredicciones = null; // Invalida caché de predicción tras re-entrenamiento
         alert('Modelos re-entrenados con éxito con los últimos datos de SQLite.');
       } else {
         alert('Error: ' + d.error);

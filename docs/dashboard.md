@@ -69,5 +69,9 @@ Retorna el estado de entrenamiento actual del modelo, el error absoluto medio (M
 Calcula y devuelve las predicciones de temperatura de forma dinámica basadas en los parámetros temporales pasados en la URL:
 `http://localhost:5000/api/predict?hora_dia=12&dia_semana=0&mes=6&semana_anio=26`
 
-### C. Endpoint `/api/ml-retrain`
+### C. Endpoint `/api/predict-day`
+Calcula y devuelve las predicciones de temperatura para las 24 horas del día (lote de 0 a 23) basadas en la fecha (día de la semana, mes, y semana del año) pasada en la URL. Esto permite trazar curvas térmicas de 24h de forma extremadamente rápida:
+`http://localhost:5000/api/predict-day?dia_semana=0&mes=6&semana_anio=26`
+
+### D. Endpoint `/api/ml-retrain`
 Forza un re-entrenamiento del modelo directamente desde la interfaz web, lo que permite al analista actualizar los coeficientes y mejorar la precisión del modelo en caliente una vez que el pipeline ha guardado nuevos datos en SQLite.
