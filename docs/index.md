@@ -12,35 +12,35 @@ El pipeline se compone de cinco etapas fundamentales que operan de forma sincron
 
 ```mermaid
 graph TD
-    subgraph Ingesta["1. Ingesta de Datos (S6)"]
-        OWM["API OpenWeatherMap"] -->|"HTTP requests por minuto"| Prod["Productor Kafka (producer.py)"]
-        Prod -->|"Publica JSON"| Kafka["Kafka Broker (weather-events)"]
+    subgraph Ingesta["1. Ingesta de Datos S6"]
+        OWM["API OpenWeatherMap"] -->|"HTTP requests por minuto"| Prod["Productor Kafka producer.py"]
+        Prod -->|"Publica JSON"| Kafka["Kafka Broker weather-events"]
         Prod -->|"Expone métricas"| Prom1["Prometheus Port 8000"]
     end
 
-    subgraph Procesamiento["2. Procesamiento & Agregación (S7)"]
-        Kafka -->|"Consumo en Streaming"| Spark["Spark Streaming (streaming_job.py)"]
-        Spark -->|"Ventanas de 5 min y Watermark 2 min"| console["Consola Spark (Update Mode)"]
+    subgraph Procesamiento["2. Procesamiento y Agregacion S7"]
+        Kafka -->|"Consumo en Streaming"| Spark["Spark Streaming streaming_job.py"]
+        Spark -->|"Ventanas de 5 min y Watermark 2 min"| console["Consola Spark Update Mode"]
     end
 
-    subgraph Almacenamiento["3. Almacenamiento Local (SQLite/CSV/Parquet)"]
-        Prod -->|"Mutex Lock / Guardar"| DB["SQLite (weather_juliaca.db)"]
-        Prod -->|"Mutex Lock / Guardar"| CSV["CSV (weather_juliaca.csv)"]
-        Prod -->|"Mutex Lock / Lotes 50"| Parquet["Parquet (data/parquet/)"]
+    subgraph Almacenamiento["3. Almacenamiento Local SQLite-CSV-Parquet"]
+        Prod -->|"Mutex Lock y Guardar"| DB["SQLite weather_juliaca.db"]
+        Prod -->|"Mutex Lock y Guardar"| CSV["CSV weather_juliaca.csv"]
+        Prod -->|"Mutex Lock y Lotes 50"| Parquet["Parquet data-parquet"]
     end
 
-    subgraph ConsumoML["4. Modelado y Visualización"]
-        DB -->|"Pandas read_sql"| ML["Machine Learning (modelo_temperatura.py)"]
-        ML -->|"Random Forest / LR"| Pred["Predicción de Temperatura"]
+    subgraph ConsumoML["4. Modelado y Visualizacion"]
+        DB -->|"Pandas read_sql"| ML["Machine Learning modelo_temperatura.py"]
+        ML -->|"Random Forest y Regresion Lineal"| Pred["Predicción de Temperatura"]
         
-        Kafka -->|"Consumo en tiempo real"| Dash["Flask Web App (app.py)"]
-        Dash -->|"Server-Sent Events (SSE)"| Web["Navegador / Dashboard (Chart.js)"]
+        Kafka -->|"Consumo en tiempo real"| Dash["Flask Web App app.py"]
+        Dash -->|"Server-Sent Events SSE"| Web["Navegador Dashboard Chart.js"]
     end
 
-    subgraph Observabilidad["5. Monitoreo (S8)"]
-        Metric["Métricas de Canal (metricas.py)"]
+    subgraph Observabilidad["5. Monitoreo S8"]
+        Metric["Métricas de Canal metricas.py"]
         Metric -->|"Calcula Lag y Backpressure"| Kafka
-        Metric -->|"Escribe logs"| Logs["Logs de Operación (pipeline_*.log)"]
+        Metric -->|"Escribe logs"| Logs["Logs de Operación pipeline-log"]
         Metric -->|"Alertas en consola"| Terminal["Terminal de Monitoreo"]
     end
 
