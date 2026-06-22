@@ -110,7 +110,32 @@ def entrenar_modelo(df):
         pred = rf.predict(ejemplo)[0]
         print(f"\n  Predicción ahora ({hora_actual:02d}:00h, día_semana={dia_semana_actual}, mes={mes_actual}, sem={semana_actual}):")
         print(f"    Temperatura estimada: {pred:.1f}°C")
-        print("="*50)
+        # Guardar modelos y metadatos a disco para carga instantánea
+        import pickle
+        import json
+        ml_dir = os.path.dirname(__file__)
+        with open(os.path.join(ml_dir, 'modelo_rf.pkl'), 'wb') as f:
+            pickle.dump(rf, f)
+        with open(os.path.join(ml_dir, 'modelo_lr.pkl'), 'wb') as f:
+            pickle.dump(lr, f)
+        with open(os.path.join(ml_dir, 'scaler.pkl'), 'wb') as f:
+            pickle.dump(scaler, f)
+            
+        importancias_dict = {}
+        for f_name, imp in zip(features, rf.feature_importances_):
+            importancias_dict[f_name] = round(float(imp), 3)
+
+        meta = {
+            "mae_lr": round(float(mae_lr), 2),
+            "r2_lr": round(float(r2_lr), 3),
+            "mae_rf": round(float(mae_rf), 2),
+            "r2_rf": round(float(r2_rf), 3),
+            "total_eventos": len(df),
+            "importancias": importancias_dict
+        }
+        with open(os.path.join(ml_dir, 'model_metadata.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        print("  Modelos y metadata persistidos en disco con éxito.")
 
         return rf, scaler
 

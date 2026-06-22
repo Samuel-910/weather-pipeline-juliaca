@@ -39,3 +39,7 @@ error.log
 *.njsproj
 *.sln
 *.swp
+
+# Modelos serializados de ML
+ml/*.pkl
+ml/model_metadata.json

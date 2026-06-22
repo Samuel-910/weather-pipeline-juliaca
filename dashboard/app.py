@@ -6,6 +6,8 @@ Abrir: http://localhost:5000
 """
 
 import os
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import json
 import time
 import queue
@@ -144,6 +146,30 @@ def entrenar_modelos_ml():
         estado_ml["error"] = None
         print(f"[ML] Modelos entrenados con éxito ({total} eventos). RF MAE={estado_ml['mae_rf']} R2={estado_ml['r2_rf']}")
 
+        # Guardar modelos y metadatos a disco para carga instantánea en el próximo arranque
+        import pickle
+        import json
+        ml_dir = os.path.join(os.path.dirname(__file__), '..', 'ml')
+        os.makedirs(ml_dir, exist_ok=True)
+        with open(os.path.join(ml_dir, 'modelo_rf.pkl'), 'wb') as f:
+            pickle.dump(rf, f)
+        with open(os.path.join(ml_dir, 'modelo_lr.pkl'), 'wb') as f:
+            pickle.dump(lr, f)
+        with open(os.path.join(ml_dir, 'scaler.pkl'), 'wb') as f:
+            pickle.dump(scaler, f)
+            
+        meta = {
+            "mae_lr": estado_ml["mae_lr"],
+            "r2_lr": estado_ml["r2_lr"],
+            "mae_rf": estado_ml["mae_rf"],
+            "r2_rf": estado_ml["r2_rf"],
+            "total_eventos": estado_ml["total_eventos"],
+            "importancias": estado_ml["importancias"]
+        }
+        with open(os.path.join(ml_dir, 'model_metadata.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        print(f"[ML] Modelos y metadata persistidos en disco con éxito ({total} eventos).")
+
     except ImportError:
         estado_ml["entrenado"] = False
         estado_ml["error"] = "Librerías faltantes. Instala scikit-learn y pandas: pip install scikit-learn pandas"
@@ -183,7 +209,7 @@ def consumir_kafka():
             )
             with lock:
                 estado["conectado"] = True
-            print(f"Kafka conectado → {BROKER} | tópico: {TOPIC}")
+            print(f"Kafka conectado -> {BROKER} | tópico: {TOPIC}")
 
             for msg in consumer:
                 t0 = time.time()
@@ -432,8 +458,53 @@ def api_predict_day():
         return jsonify({"success": False, "error": f"Error al predecir el día: {str(e)}"}), 500
 
 
-# Iniciar entrenamiento de ML en segundo plano al arrancar la app Flask
-threading.Thread(target=entrenar_modelos_ml, daemon=True).start()
+def cargar_modelos_ml():
+    global estado_ml
+    try:
+        import pickle
+        import json
+        ml_dir = os.path.join(os.path.dirname(__file__), '..', 'ml')
+        path_rf = os.path.join(ml_dir, 'modelo_rf.pkl')
+        path_lr = os.path.join(ml_dir, 'modelo_lr.pkl')
+        path_scaler = os.path.join(ml_dir, 'scaler.pkl')
+        path_meta = os.path.join(ml_dir, 'model_metadata.json')
+
+        if os.path.exists(path_rf) and os.path.exists(path_lr) and os.path.exists(path_scaler) and os.path.exists(path_meta):
+            print("[ML] Cargando modelos persistidos desde disco...")
+            with open(path_rf, 'rb') as f:
+                rf = pickle.load(f)
+            with open(path_lr, 'rb') as f:
+                lr = pickle.load(f)
+            with open(path_scaler, 'rb') as f:
+                scaler = pickle.load(f)
+            with open(path_meta, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+
+            estado_ml["modelo_rf"] = rf
+            estado_ml["modelo_lr"] = lr
+            estado_ml["scaler"] = scaler
+            estado_ml["mae_lr"] = meta["mae_lr"]
+            estado_ml["r2_lr"] = meta["r2_lr"]
+            estado_ml["mae_rf"] = meta["mae_rf"]
+            estado_ml["r2_rf"] = meta["r2_rf"]
+            estado_ml["importancias"] = meta["importancias"]
+            estado_ml["total_eventos"] = meta["total_eventos"]
+            estado_ml["entrenado"] = True
+            estado_ml["error"] = None
+            print(f"[ML] Modelos cargados exitosamente desde disco (entrenados con {meta['total_eventos']} eventos).")
+            return True
+    except Exception as e:
+        print(f"[ML ERROR] Error al cargar modelos persistidos: {str(e)}")
+    return False
+
+
+# Iniciar ML cargando modelos de disco, o entrenándolos en segundo plano si no existen
+def init_ml():
+    if not cargar_modelos_ml():
+        print("[ML] No se encontraron modelos guardados en disco. Iniciando entrenamiento en segundo plano...")
+        threading.Thread(target=entrenar_modelos_ml, daemon=True).start()
+
+init_ml()
 
 
 HTML = """<!DOCTYPE html>
