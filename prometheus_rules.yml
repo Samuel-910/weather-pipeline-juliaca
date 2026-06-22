@@ -1,0 +1,29 @@
+groups:
+  - name: weather_alerts
+    rules:
+      - alert: ProducerDown
+        expr: up{job="weather-producer"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "El Productor de Clima se ha detenido"
+          description: "Prometheus no ha podido conectarse al script de Python (host.docker.internal:8000) por más de 1 minuto."
+
+      - alert: HighApiErrors
+        expr: rate(weather_events_errors_total[2m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Errores detectados en la API de Clima"
+          description: "El script de Python está experimentando errores al intentar contactar la API de OpenWeatherMap o al enviar a Kafka."
+
+      - alert: ExtremeTemperature
+        expr: weather_temperature_celsius > 30 or weather_temperature_celsius < -10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Temperatura extrema detectada en Juliaca"
+          description: "La temperatura actual es inusualmente alta o baja ({{ $value }}°C) durante más de 5 minutos."

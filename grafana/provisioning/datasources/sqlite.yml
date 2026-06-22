@@ -1,0 +1,9 @@
+apiVersion: 1
+datasources:
+  - name: SQLite Weather
+    type: frser-sqlite-datasource
+    uid: PD557C20E8125662D
+    access: proxy
+    isDefault: false
+    jsonData:
+      path: /data/weather_juliaca.db

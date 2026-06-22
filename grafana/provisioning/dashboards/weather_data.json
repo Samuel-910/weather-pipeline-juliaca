@@ -1,0 +1,197 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "panels": [
+    {
+      "type": "gauge",
+      "title": "Temperatura Actual (°C)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "PD557C20E8125662D"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT temperatura as value FROM eventos ORDER BY id DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true,
+        "min": -20,
+        "max": 50
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Velocidad del Viento (m/s)",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "PD557C20E8125662D"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT velocidad_viento as value FROM eventos ORDER BY id DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "min": 0,
+        "max": 30
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Humedad (%)",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "PD557C20E8125662D"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT humedad as value FROM eventos ORDER BY id DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "min": 0,
+        "max": 100
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Historial de Temperatura (°C)",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "PD557C20E8125662D"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT strftime('%s', timestamp) * 1000 as time, temperatura as value FROM eventos ORDER BY timestamp ASC;",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Historial de Presión Atmosférica (hPa)",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "PD557C20E8125662D"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT strftime('%s', timestamp) * 1000 as time, presion as value FROM eventos ORDER BY timestamp ASC;",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ],
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-2h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Weather Data Explorer",
+  "uid": "weather-data-dash",
+  "version": 3
+}

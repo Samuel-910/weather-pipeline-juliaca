@@ -1,0 +1,59 @@
+site_name: Weather Pipeline Juliaca
+site_description: Documentación técnica del pipeline de datos climáticos de Juliaca usando Kafka, Spark Streaming y Machine Learning.
+site_author: Samuel-910
+repo_name: Samuel-910/weather-pipeline-juliaca
+repo_url: https://github.com/Samuel-910/weather-pipeline-juliaca
+
+theme:
+  name: material
+  language: es
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Cambiar a modo claro
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Cambiar a modo oscuro
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - content.code.annotate
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Inicio: index.md
+  - Instalación y Configuración: instalacion.md
+  - Componentes del Pipeline:
+      - Ingesta (Kafka): s6_kafka.md
+      - Procesamiento (Spark): s7_spark.md
+      - Almacenamiento (SQLite/CSV/Parquet): almacenamiento.md
+  - Modelado y Visualización:
+      - Machine Learning: ml_model.md
+      - Dashboard en Vivo: dashboard.md
+  - Operaciones:
+      - Observabilidad y Monitoreo: observabilidad.md
+      - Guía de Ejecución: ejecucion.md
