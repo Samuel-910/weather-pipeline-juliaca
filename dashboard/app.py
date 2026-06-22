@@ -12,7 +12,7 @@ import queue
 import threading
 from datetime import datetime
 from collections import defaultdict, deque
-from flask import Flask, render_template_string, jsonify, Response, stream_with_context
+from flask import Flask, render_template_string, jsonify, Response, stream_with_context, request
 from kafka import KafkaConsumer
 from dotenv import load_dotenv
 
@@ -38,6 +38,111 @@ estado = {
     "batch_num":     0,
 }
 lock = threading.Lock()
+
+# Estructura para el estado de los modelos predictivos de Machine Learning
+estado_ml = {
+    "entrenado": False,
+    "error": "El modelo de ML aún no se ha inicializado.",
+    "mae_lr": None,
+    "r2_lr": None,
+    "mae_rf": None,
+    "r2_rf": None,
+    "total_eventos": 0,
+    "importancias": {},
+    "modelo_rf": None,
+    "modelo_lr": None,
+    "scaler": None,
+}
+
+def entrenar_modelos_ml():
+    global estado_ml
+    print("[ML] Iniciando entrenamiento de modelos de temperatura...")
+    try:
+        import pandas as pd
+        import sqlite3
+        from sklearn.linear_model import LinearRegression
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import mean_absolute_error, r2_score
+        from sklearn.preprocessing import StandardScaler
+        import numpy as np
+
+        db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'weather_juliaca.db')
+        if not os.path.exists(db_path):
+            estado_ml["entrenado"] = False
+            estado_ml["error"] = "La base de datos SQLite no existe en el disco todavía."
+            return
+
+        con = sqlite3.connect(db_path)
+        df = pd.read_sql(
+            """
+            SELECT hora_dia, dia_semana, humedad, presion,
+                   velocidad_viento, temperatura
+            FROM eventos
+            WHERE temperatura IS NOT NULL
+            ORDER BY timestamp
+            """,
+            con,
+        )
+        con.close()
+
+        total = len(df)
+        estado_ml["total_eventos"] = total
+
+        if total < 20:
+            estado_ml["entrenado"] = False
+            estado_ml["error"] = f"Se necesitan al menos 20 registros para entrenar. Actualmente hay {total} en la BD."
+            return
+
+        features = ["hora_dia", "dia_semana", "humedad", "presion", "velocidad_viento"]
+        X = df[features].values
+        y = df["temperatura"].values
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_test_s  = scaler.transform(X_test)
+
+        lr = LinearRegression()
+        lr.fit(X_train_s, y_train)
+        pred_lr = lr.predict(X_test_s)
+        
+        rf = RandomForestRegressor(n_estimators=50, random_state=42)
+        rf.fit(X_train, y_train)
+        pred_rf = rf.predict(X_test)
+
+        mae_lr = mean_absolute_error(y_test, pred_lr)
+        r2_lr = r2_score(y_test, pred_lr)
+        mae_rf = mean_absolute_error(y_test, pred_rf)
+        r2_rf = r2_score(y_test, pred_rf)
+
+        importancias = {}
+        for f, imp in zip(features, rf.feature_importances_):
+            importancias[f] = round(float(imp), 3)
+
+        estado_ml["modelo_rf"] = rf
+        estado_ml["modelo_lr"] = lr
+        estado_ml["scaler"] = scaler
+        estado_ml["mae_lr"] = round(float(mae_lr), 2)
+        estado_ml["r2_lr"] = round(float(r2_lr), 3)
+        estado_ml["mae_rf"] = round(float(mae_rf), 2)
+        estado_ml["r2_rf"] = round(float(r2_rf), 3)
+        estado_ml["importancias"] = importancias
+        estado_ml["entrenado"] = True
+        estado_ml["error"] = None
+        print(f"[ML] Modelos entrenados con éxito ({total} eventos). RF MAE={estado_ml['mae_rf']} R2={estado_ml['r2_rf']}")
+
+    except ImportError:
+        estado_ml["entrenado"] = False
+        estado_ml["error"] = "Librerías faltantes. Instala scikit-learn y pandas: pip install scikit-learn pandas"
+        print(f"[ML ERROR] {estado_ml['error']}")
+    except Exception as e:
+        estado_ml["entrenado"] = False
+        estado_ml["error"] = f"Error de entrenamiento: {str(e)}"
+        print(f"[ML ERROR] {estado_ml['error']}")
 
 # Cola de eventos SSE — cada cliente tiene la suya
 clientes_sse = []
@@ -201,6 +306,79 @@ def stream():
     )
 
 
+# ─── Endpoints de Machine Learning ─────────────────────────────────────────────
+
+@app.route("/api/ml-info")
+def api_ml_info():
+    return jsonify({
+        "entrenado": estado_ml["entrenado"],
+        "error": estado_ml["error"],
+        "total_eventos": estado_ml["total_eventos"],
+        "mae_lr": estado_ml["mae_lr"],
+        "r2_lr": estado_ml["r2_lr"],
+        "mae_rf": estado_ml["mae_rf"],
+        "r2_rf": estado_ml["r2_rf"],
+        "importancias": estado_ml["importancias"]
+    })
+
+
+@app.route("/api/ml-retrain", methods=["POST", "GET"])
+def api_ml_retrain():
+    entrenar_modelos_ml()
+    return jsonify({
+        "entrenado": estado_ml["entrenado"],
+        "error": estado_ml["error"],
+        "total_eventos": estado_ml["total_eventos"],
+        "mae_rf": estado_ml["mae_rf"],
+        "r2_rf": estado_ml["r2_rf"]
+    })
+
+
+@app.route("/api/predict")
+def api_predict():
+    if not estado_ml["entrenado"]:
+        return jsonify({"success": False, "error": estado_ml["error"] or "El modelo predictivo no está listo."}), 400
+
+    try:
+        hora_dia = int(request.args.get("hora_dia", datetime.now().hour))
+        dia_semana = int(request.args.get("dia_semana", datetime.now().weekday()))
+        humedad = int(request.args.get("humedad", 60))
+        presion = int(request.args.get("presion", 630))
+        velocidad_viento = float(request.args.get("velocidad_viento", 2.0))
+
+        import numpy as np
+        X_in = np.array([[hora_dia, dia_semana, humedad, presion, velocidad_viento]])
+
+        rf_model = estado_ml["modelo_rf"]
+        pred_rf = round(float(rf_model.predict(X_in)[0]), 2)
+
+        lr_model = estado_ml["modelo_lr"]
+        scaler = estado_ml["scaler"]
+        X_in_s = scaler.transform(X_in)
+        pred_lr = round(float(lr_model.predict(X_in_s)[0]), 2)
+
+        return jsonify({
+            "success": True,
+            "inputs": {
+                "hora_dia": hora_dia,
+                "dia_semana": dia_semana,
+                "humedad": humedad,
+                "presion": presion,
+                "velocidad_viento": velocidad_viento
+            },
+            "predicciones": {
+                "random_forest": pred_rf,
+                "regresion_lineal": pred_lr
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error al predecir: {str(e)}"}), 500
+
+
+# Iniciar entrenamiento de ML en segundo plano al arrancar la app Flask
+threading.Thread(target=entrenar_modelos_ml, daemon=True).start()
+
+
 HTML = """<!DOCTYPE html>
 <html lang="es" data-theme="dark">
 <head>
@@ -223,10 +401,13 @@ HTML = """<!DOCTYPE html>
   --blue: #3b82f6;
   --blue-bg: rgba(59, 130, 246, 0.15);
   --purple: #8b5cf6;
+  --purple-bg: rgba(139, 92, 246, 0.15);
   --green: #10b981;
+  --green-bg: rgba(16, 185, 129, 0.15);
   --red: #ef4444;
   --bar-bg: #334155;
   --card-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+  --glass: rgba(30, 41, 59, 0.7);
 }
 :root[data-theme="light"] {
   --bg: #f8fafc;
@@ -239,15 +420,18 @@ HTML = """<!DOCTYPE html>
   --blue: #2563eb;
   --blue-bg: rgba(37, 99, 235, 0.15);
   --purple: #7c3aed;
+  --purple-bg: rgba(124, 58, 237, 0.15);
   --green: #059669;
+  --green-bg: rgba(5, 150, 105, 0.15);
   --red: #dc2626;
   --bar-bg: #e2e8f0;
   --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.025);
+  --glass: rgba(255, 255, 255, 0.7);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); padding: 20px; transition: background 0.3s, color 0.3s; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding: 10px; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 10px; }
 h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; display: flex; align-items: center; gap: 10px; }
 h1 i { color: var(--amber); }
 .header p { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
@@ -260,6 +444,20 @@ h1 i { color: var(--amber); }
 .dot { width: 8px; height: 8px; border-radius: 50%; }
 .dot-ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
 .dot-err { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+/* Navigation Tabs */
+.nav-tabs { display: flex; gap: 8px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.tab-btn { cursor: pointer; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text-muted); transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; }
+.tab-btn:hover { background: var(--bg2); color: var(--text); }
+.tab-btn.active { background: var(--amber-bg); color: var(--amber); border-color: rgba(245, 158, 11, 0.3); }
+
+.tab-content { display: none; animation: fadeIn 0.3s ease-in-out; }
+.tab-content.active { display: block; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 20px; }
 .mcard { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: var(--card-shadow); transition: transform 0.2s; display: flex; flex-direction: column; justify-content: space-between; }
@@ -274,10 +472,10 @@ h1 i { color: var(--amber); }
 /* Grids / Rows */
 .row { display: grid; gap: 16px; margin-bottom: 20px; }
 .r2 { grid-template-columns: 1fr 1fr; }
-@media(max-width:800px){ .r2 { grid-template-columns: 1fr; } }
+@media(max-width:900px){ .r2 { grid-template-columns: 1fr; } }
 
-.panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: var(--card-shadow); }
-.panel h2 { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }
+.panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: var(--card-shadow); position: relative; }
+.panel h2 { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
 
 /* Donut Chart Inner Text */
 .donut-container { position: relative; width: 100%; max-width: 300px; margin: 0 auto; }
@@ -298,11 +496,58 @@ h1 i { color: var(--amber); }
 .log-ts { color: var(--text-muted); min-width: 70px; }
 .log-desc { color: var(--text-muted); }
 
+/* Form Controls for ML */
+.form-group { margin-bottom: 16px; }
+.form-label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; }
+.form-label span.val { color: var(--amber); font-weight: 700; }
+.form-input-range { width: 100%; height: 6px; background: var(--border); border-radius: 4px; outline: none; -webkit-appearance: none; transition: background 0.2s; }
+.form-input-range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--amber); cursor: pointer; transition: transform 0.1s; }
+.form-input-range::-webkit-slider-thumb:hover { transform: scale(1.2); }
+.form-select { width: 100%; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); font-family: inherit; font-size: 14px; outline: none; transition: border-color 0.2s; }
+.form-select:focus { border-color: var(--amber); }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px 20px; font-size: 14px; font-weight: 600; text-align: center; border-radius: 8px; border: 1px solid transparent; cursor: pointer; transition: all 0.2s ease; }
+.btn-primary { background: var(--amber); color: #000; }
+.btn-primary:hover { background: #f5b02b; transform: translateY(-1px); }
+.btn-secondary { background: var(--bg); border-color: var(--border); color: var(--text); }
+.btn-secondary:hover { background: var(--border); }
+
+/* ML Output Cards */
+.ml-results { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+@media(max-width:450px){ .ml-results { grid-template-columns: 1fr; } }
+.ml-res-card { padding: 20px; border-radius: 16px; border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: relative; overflow: hidden; background: var(--bg2); box-shadow: var(--card-shadow); }
+.ml-res-card.rf { border-left: 4px solid var(--purple); background: linear-gradient(180deg, var(--purple-bg) 0%, var(--bg2) 100%); }
+.ml-res-card.lr { border-left: 4px solid var(--blue); background: linear-gradient(180deg, var(--blue-bg) 0%, var(--bg2) 100%); }
+.ml-res-val { font-size: 40px; font-weight: 700; letter-spacing: -1px; margin: 8px 0; }
+.ml-res-title { font-size: 12px; text-transform: uppercase; font-weight: 700; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+
+/* Features Importance simple bars */
+.feat-list { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.feat-item { display: flex; align-items: center; font-size: 12px; }
+.feat-name { width: 110px; color: var(--text-muted); font-weight: 500; text-transform: capitalize; }
+.feat-bar-wrap { flex: 1; height: 8px; background: var(--bar-bg); border-radius: 4px; overflow: hidden; margin: 0 12px; }
+.feat-bar { height: 100%; background: var(--amber); border-radius: 4px; width: 0%; transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
+.feat-val { width: 40px; text-align: right; font-weight: 600; color: var(--text); }
+
+/* Alerts and Loading */
+.alert { padding: 16px; border-radius: 12px; border: 1px solid transparent; font-size: 13px; line-height: 1.5; display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
+.alert-warning { background: var(--amber-bg); color: var(--amber); border-color: rgba(245, 158, 11, 0.25); }
+.alert-warning i { font-size: 18px; margin-top: 1px; }
+
+.loading-overlay { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.85); z-index: 10; border-radius: 16px; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
+.spinner { width: 40px; height: 40px; border: 4px solid var(--border); border-top-color: var(--amber); border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Table for Metrics */
+.metrics-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+.metrics-table th, .metrics-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+.metrics-table th { color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+.metrics-table td { font-weight: 500; }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
-
 </style>
 </head>
 <body>
@@ -320,81 +565,349 @@ h1 i { color: var(--amber); }
   </div>
 </div>
 
-<!-- Row: Gauges (Doughnut charts) -->
-<div class="row r2">
-  <div class="panel">
-    <h2><i class="fa-solid fa-temperature-half" style="color:var(--amber)"></i> Temperatura Actual</h2>
-    <div class="donut-container">
-      <canvas id="gauge-temp"></canvas>
-      <div class="donut-inner">
-        <div class="donut-val" id="m-temp">—°</div>
-        <div class="donut-label">Sensación: <span id="m-sens">—°C</span></div>
+<!-- Tabs Navigation -->
+<div class="nav-tabs">
+  <div class="tab-btn active" id="tab-monitoreo" onclick="switchTab('monitoreo')"><i class="fa-solid fa-chart-line"></i> Monitoreo en Vivo</div>
+  <div class="tab-btn" id="tab-prediccion" onclick="switchTab('prediccion')"><i class="fa-solid fa-brain"></i> Predicciones ML</div>
+</div>
+
+<!-- ───────────────── TAB: MONITOREO ───────────────── -->
+<div id="section-monitoreo" class="tab-content active">
+  <!-- Row: Gauges -->
+  <div class="row r2">
+    <div class="panel">
+      <h2><i class="fa-solid fa-temperature-half" style="color:var(--amber)"></i> Temperatura Actual</h2>
+      <div class="donut-container">
+        <canvas id="gauge-temp"></canvas>
+        <div class="donut-inner">
+          <div class="donut-val" id="m-temp">—°</div>
+          <div class="donut-label">Sensación: <span id="m-sens">—°C</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2><i class="fa-solid fa-droplet" style="color:var(--blue)"></i> Humedad Relativa</h2>
+      <div class="donut-container">
+        <canvas id="gauge-hum"></canvas>
+        <div class="donut-inner">
+          <div class="donut-val" id="m-hum">—%</div>
+          <div class="donut-label" id="m-hum-desc">Cargando...</div>
+        </div>
       </div>
     </div>
   </div>
-  <div class="panel">
-    <h2><i class="fa-solid fa-droplet" style="color:var(--blue)"></i> Humedad Relativa</h2>
-    <div class="donut-container">
-      <canvas id="gauge-hum"></canvas>
-      <div class="donut-inner">
-        <div class="donut-val" id="m-hum">—%</div>
-        <div class="donut-label" id="m-hum-desc">Cargando...</div>
+
+  <!-- Metrics Cards -->
+  <div class="metrics">
+    <div class="mcard">
+      <div class="mcard-header"><i class="fa-solid fa-wind" style="color:var(--purple)"></i> Viento</div>
+      <div class="val-text"><span id="m-viento">—</span> <span class="val-unit">m/s</span></div>
+      <div class="mcard-footer">Velocidad media.<br><span id="m-viento-t">Normal</span></div>
+    </div>
+    <div class="mcard">
+      <div class="mcard-header"><i class="fa-solid fa-gauge-high" style="color:var(--green)"></i> Presión</div>
+      <div class="val-text"><span id="m-pres">—</span> <span class="val-unit">hPa</span></div>
+      <div class="mcard-footer">Altitud de Juliaca: ~3820m.<br>Normal: ~630hPa</div>
+    </div>
+    <div class="mcard">
+      <div class="mcard-header"><i class="fa-solid fa-database" style="color:var(--text-muted)"></i> Eventos Kafka</div>
+      <div class="val-text"><span id="m-total">0</span></div>
+      <div class="mcard-footer">Desde el inicio del stream.<br>Offset: <span id="m-offset">—</span></div>
+    </div>
+    <div class="mcard">
+      <div class="mcard-header"><i class="fa-solid fa-bolt" style="color:var(--amber)"></i> Latencia</div>
+      <div class="val-text"><span id="m-lat">—</span> <span class="val-unit">ms</span></div>
+      <div class="mcard-footer">Tiempo de procesamiento.<br><span id="m-lat-t">Óptima</span></div>
+    </div>
+  </div>
+
+  <!-- Line Charts -->
+  <div class="row r2">
+    <div class="panel">
+      <h2><i class="fa-solid fa-chart-line" style="color:var(--amber)"></i> Histórico de Temperatura</h2>
+      <canvas id="chart-temp" height="100"></canvas>
+    </div>
+    <div class="panel">
+      <h2><i class="fa-solid fa-chart-line" style="color:var(--green)"></i> Presión Atmosférica</h2>
+      <canvas id="chart-pres" height="100"></canvas>
+    </div>
+  </div>
+
+  <div class="row r2">
+    <div class="panel">
+      <h2><i class="fa-solid fa-calendar-day" style="color:var(--amber)"></i> Mapa de Calor (24h)</h2>
+      <div class="hm-wrap">
+        <div class="hm-hours" id="hm-hdr"></div>
+        <div class="hm-row" id="hm-row"></div>
       </div>
     </div>
-  </div>
-</div>
-
-<!-- Metrics Cards -->
-<div class="metrics">
-  <div class="mcard">
-    <div class="mcard-header"><i class="fa-solid fa-wind" style="color:var(--purple)"></i> Viento</div>
-    <div class="val-text"><span id="m-viento">—</span> <span class="val-unit">m/s</span></div>
-    <div class="mcard-footer">Velocidad media.<br><span id="m-viento-t">Normal</span></div>
-  </div>
-  <div class="mcard">
-    <div class="mcard-header"><i class="fa-solid fa-gauge-high" style="color:var(--green)"></i> Presión</div>
-    <div class="val-text"><span id="m-pres">—</span> <span class="val-unit">hPa</span></div>
-    <div class="mcard-footer">Altitud de Juliaca: ~3820m.<br>Normal: ~630hPa</div>
-  </div>
-  <div class="mcard">
-    <div class="mcard-header"><i class="fa-solid fa-database" style="color:var(--text-muted)"></i> Eventos Kafka</div>
-    <div class="val-text"><span id="m-total">0</span></div>
-    <div class="mcard-footer">Desde el inicio del stream.<br>Offset: <span id="m-offset">—</span></div>
-  </div>
-  <div class="mcard">
-    <div class="mcard-header"><i class="fa-solid fa-bolt" style="color:var(--amber)"></i> Latencia</div>
-    <div class="val-text"><span id="m-lat">—</span> <span class="val-unit">ms</span></div>
-    <div class="mcard-footer">Tiempo de procesamiento.<br><span id="m-lat-t">Óptima</span></div>
-  </div>
-</div>
-
-<!-- Line Charts -->
-<div class="row r2">
-  <div class="panel">
-    <h2><i class="fa-solid fa-chart-line" style="color:var(--amber)"></i> Histórico de Temperatura</h2>
-    <canvas id="chart-temp" height="100"></canvas>
-  </div>
-  <div class="panel">
-    <h2><i class="fa-solid fa-chart-line" style="color:var(--green)"></i> Presión Atmosférica</h2>
-    <canvas id="chart-pres" height="100"></canvas>
-  </div>
-</div>
-
-<div class="row r2">
-  <div class="panel">
-    <h2><i class="fa-solid fa-calendar-day" style="color:var(--amber)"></i> Mapa de Calor (24h)</h2>
-    <div class="hm-wrap">
-      <div class="hm-hours" id="hm-hdr"></div>
-      <div class="hm-row" id="hm-row"></div>
+    <div class="panel">
+      <h2><i class="fa-solid fa-terminal" style="color:var(--text-muted)"></i> Log de Eventos en Vivo</h2>
+      <div class="log-wrap" id="log-box"></div>
     </div>
   </div>
-  <div class="panel">
-    <h2><i class="fa-solid fa-terminal" style="color:var(--text-muted)"></i> Log de Eventos en Vivo</h2>
-    <div class="log-wrap" id="log-box"></div>
+</div>
+
+<!-- ───────────────── TAB: PREDICCIONES ML ───────────────── -->
+<div id="section-prediccion" class="tab-content">
+  <div class="row r2">
+    <!-- Panel Izquierdo: Formularios -->
+    <div class="panel">
+      <h2><i class="fa-solid fa-sliders" style="color:var(--amber)"></i> Ajuste de Variables Climatológicas</h2>
+      
+      <div class="form-group">
+        <div class="form-label">Hora del Día <span id="lbl-hora" class="val">12h</span></div>
+        <input type="range" class="form-input-range" id="param-hora" min="0" max="23" value="12" oninput="updLbl('hora', this.value + 'h')">
+      </div>
+
+      <div class="form-group">
+        <div class="form-label">Día de la Semana</div>
+        <select class="form-select" id="param-dia">
+          <option value="0">Lunes</option>
+          <option value="1">Martes</option>
+          <option value="2">Miércoles</option>
+          <option value="3">Jueves</option>
+          <option value="4">Viernes</option>
+          <option value="5">Sábado</option>
+          <option value="6">Domingo</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <div class="form-label">Humedad Relativa <span id="lbl-hum" class="val">60%</span></div>
+        <input type="range" class="form-input-range" id="param-hum" min="0" max="100" value="60" oninput="updLbl('hum', this.value + '%')">
+      </div>
+
+      <div class="form-group">
+        <div class="form-label">Presión Atmosférica <span id="lbl-pres" class="val">630 hPa</span></div>
+        <input type="range" class="form-input-range" id="param-pres" min="600" max="1000" value="630" oninput="updLbl('pres', this.value + ' hPa')">
+      </div>
+
+      <div class="form-group">
+        <div class="form-label">Velocidad del Viento <span id="lbl-viento" class="val">2.0 m/s</span></div>
+        <input type="range" class="form-input-range" id="param-viento" min="0" max="25" step="0.5" value="2" oninput="updLbl('viento', parseFloat(this.value).toFixed(1) + ' m/s')">
+      </div>
+
+      <div style="margin-top: 24px; display:flex; gap:12px;">
+        <button class="btn btn-primary" onclick="calcularPrediccion()" id="btn-calc"><i class="fa-solid fa-wand-magic-sparkles"></i> Estimar Temperatura</button>
+      </div>
+    </div>
+
+    <!-- Panel Derecho: Resultados -->
+    <div class="panel" id="panel-ml-resultados">
+      <div class="loading-overlay" id="ml-loading">
+        <div class="spinner"></div>
+        <div style="font-weight: 600; font-size:14px; color:var(--text)" id="ml-loading-txt">Calculando estimación...</div>
+      </div>
+      
+      <h2><i class="fa-solid fa-square-poll-vertical" style="color:var(--green)"></i> Resultados de Modelos</h2>
+      
+      <!-- Advertencia si no está entrenado -->
+      <div id="ml-alert-insuficiente" class="alert alert-warning" style="display:none;">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <div>
+          <strong>¡Modelo no listo!</strong><br>
+          <span id="ml-alert-msg">Se necesitan al menos 20 registros históricos en SQLite para poder entrenar el modelo.</span>
+          <br><br>
+          <em>Sugerencia: Abre Docker Desktop, levanta Kafka e inicia el productor de clima para acumular eventos.</em>
+        </div>
+      </div>
+
+      <div id="ml-visualizacion-grupo">
+        <div class="ml-results">
+          <div class="ml-res-card rf">
+            <div class="ml-res-title"><i class="fa-solid fa-tree" style="color:var(--purple)"></i> Random Forest</div>
+            <div class="ml-res-val" id="pred-val-rf">—°C</div>
+            <div style="font-size:11px; color:var(--text-muted)">Modelo no-lineal (Ensamble)</div>
+          </div>
+          <div class="ml-res-card lr">
+            <div class="ml-res-title"><i class="fa-solid fa-chart-line" style="color:var(--blue)"></i> Regresión Lineal</div>
+            <div class="ml-res-val" id="pred-val-lr">—°C</div>
+            <div style="font-size:11px; color:var(--text-muted)">Modelo lineal (Normalizado)</div>
+          </div>
+        </div>
+
+        <h2><i class="fa-solid fa-chart-bar" style="color:var(--amber)"></i> Importancia de Características (Random Forest)</h2>
+        <div class="feat-list" id="feat-list-box">
+          <!-- Dinámico -->
+        </div>
+
+        <h2 style="margin-top:24px;"><i class="fa-solid fa-circle-info" style="color:var(--blue)"></i> Precisión y Datos de Validación</h2>
+        <table class="metrics-table">
+          <thead>
+            <tr>
+              <th>Algoritmo</th>
+              <th>Error Medio (MAE)</th>
+              <th>Ajuste (R²)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="color:var(--purple); font-weight:700;">Random Forest</td>
+              <td id="metric-mae-rf">—</td>
+              <td id="metric-r2-rf">—</td>
+            </tr>
+            <tr>
+              <td style="color:var(--blue); font-weight:700;">Regresión Lineal</td>
+              <td id="metric-mae-lr">—</td>
+              <td id="metric-r2-lr">—</td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:8px;" id="ml-total-txt">
+          Datos de entrenamiento: — eventos históricos.
+        </div>
+      </div>
+
+      <div style="margin-top:20px; border-top: 1px solid var(--border); padding-top:16px;">
+        <button class="btn btn-secondary" onclick="reentrenarML()" id="btn-retrain" style="font-size:12px; padding: 8px 12px;"><i class="fa-solid fa-rotate"></i> Re-entrenar con Datos Frescos</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <script>
+// Pestañas
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  
+  if (tab === 'monitoreo') {
+    document.getElementById('tab-monitoreo').classList.add('active');
+    document.getElementById('section-monitoreo').classList.add('active');
+  } else {
+    document.getElementById('tab-prediccion').classList.add('active');
+    document.getElementById('section-prediccion').classList.add('active');
+    cargarMLInfo(); // Actualiza el estado al entrar
+  }
+}
+
+function updLbl(id, val) {
+  document.getElementById('lbl-' + id).textContent = val;
+  // Predicción en tiempo real al arrastrar sliders (opcional y premium)
+  debounceCalcular();
+}
+
+let debounceTimer;
+function debounceCalcular() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    calcularPrediccion(true); // Modo silencioso sin overlay
+  }, 150);
+}
+
+// Cargar estado inicial de ML
+function cargarMLInfo() {
+  fetch('/api/ml-info')
+    .then(r => r.json())
+    .then(d => {
+      const alertDiv = document.getElementById('ml-alert-insuficiente');
+      const visualDiv = document.getElementById('ml-visualizacion-grupo');
+      
+      if (!d.entrenado) {
+        alertDiv.style.display = 'block';
+        document.getElementById('ml-alert-msg').textContent = d.error || 'Datos insuficientes.';
+        visualDiv.style.display = 'none';
+      } else {
+        alertDiv.style.display = 'none';
+        visualDiv.style.display = 'block';
+        
+        // Cargar métricas
+        document.getElementById('metric-mae-rf').textContent = d.mae_rf + ' °C';
+        document.getElementById('metric-r2-rf').textContent = d.r2_rf;
+        document.getElementById('metric-mae-lr').textContent = d.mae_lr + ' °C';
+        document.getElementById('metric-r2-lr').textContent = d.r2_lr;
+        document.getElementById('ml-total-txt').textContent = `Datos de entrenamiento: ${d.total_eventos} eventos históricos (80% entrenamiento, 20% test).`;
+        
+        // Pintar importancias
+        const box = document.getElementById('feat-list-box');
+        box.innerHTML = '';
+        
+        // Ordenar variables por importancia
+        const sorted = Object.entries(d.importancias).sort((a,b) => b[1] - a[1]);
+        
+        sorted.forEach(([k, v]) => {
+          const pct = (v * 100).toFixed(0);
+          const friendlyNames = {
+            "hora_dia": "Hora del Día",
+            "dia_semana": "Día de Semana",
+            "humedad": "Humedad",
+            "presion": "Presión",
+            "velocidad_viento": "Viento"
+          };
+          box.innerHTML += `
+            <div class="feat-item">
+              <span class="feat-name">${friendlyNames[k] || k}</span>
+              <div class="feat-bar-wrap">
+                <div class="feat-bar" style="width: ${pct}%"></div>
+              </div>
+              <span class="feat-val">${pct}%</span>
+            </div>
+          `;
+        });
+
+        // Hacer una predicción inicial silenciosa
+        calcularPrediccion(true);
+      }
+    })
+    .catch(() => {});
+}
+
+// Calcular Predicción de Temperatura
+function calcularPrediccion(silencioso = false) {
+  const loading = document.getElementById('ml-loading');
+  if (!silencioso) {
+    document.getElementById('ml-loading-txt').textContent = 'Calculando estimación...';
+    loading.style.display = 'flex';
+  }
+
+  const hora = document.getElementById('param-hora').value;
+  const dia = document.getElementById('param-dia').value;
+  const hum = document.getElementById('param-hum').value;
+  const pres = document.getElementById('param-pres').value;
+  const viento = document.getElementById('param-viento').value;
+
+  fetch(`/api/predict?hora_dia=${hora}&dia_semana=${dia}&humedad=${hum}&presion=${pres}&velocidad_viento=${viento}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        document.getElementById('pred-val-rf').textContent = d.predicciones.random_forest.toFixed(1) + ' °C';
+        document.getElementById('pred-val-lr').textContent = d.predicciones.regresion_lineal.toFixed(1) + ' °C';
+      }
+    })
+    .finally(() => {
+      if (!silencioso) loading.style.display = 'none';
+    });
+}
+
+// Re-entrenar modelo
+function reentrenarML() {
+  const btn = document.getElementById('btn-retrain');
+  const loading = document.getElementById('ml-loading');
+  
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Entrenando...';
+  document.getElementById('ml-loading-txt').textContent = 'Entrenando modelos de regresión...';
+  loading.style.display = 'flex';
+
+  fetch('/api/ml-retrain')
+    .then(r => r.json())
+    .then(d => {
+      if (d.entrenado) {
+        alert('Modelos re-entrenados con éxito con los últimos datos de SQLite.');
+      } else {
+        alert('Error: ' + d.error);
+      }
+      cargarMLInfo();
+    })
+    .catch(() => { alert('No se pudo re-entrenar el modelo.'); })
+    .finally(() => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-rotate"></i> Re-entrenar con Datos Frescos';
+      loading.style.display = 'none';
+    });
+}
+
 // Theme Toggle
 const themeBtn = document.getElementById('theme-btn');
 const htmlEl = document.documentElement;
@@ -541,7 +1054,7 @@ function aplicar(d) {
   }
 
   if (d.heatmap) {
-    d.heatmap.forEach(h => { hmCells[h.h].style.background = tempColor(h.temp); });
+    d.heatmap.forEach(h => { if(hmCells[h.h]) hmCells[h.h].style.background = tempColor(h.temp); });
   }
 
   // Update Line Charts
