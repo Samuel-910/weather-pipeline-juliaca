@@ -79,8 +79,8 @@ def entrenar_modelo(df):
         print(f"    MAE = {mae_lr:.2f}°C")
         print(f"    R²  = {r2_lr:.3f}")
 
-        # Random Forest
-        rf = RandomForestRegressor(n_estimators=50, random_state=42)
+        # Random Forest (Optimizado con n_jobs=-1 para entrenamiento paralelo)
+        rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
         rf.fit(X_train, y_train)
         pred_rf = rf.predict(X_test)
         mae_rf  = mean_absolute_error(y_test, pred_rf)

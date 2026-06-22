@@ -56,6 +56,8 @@ estado_ml = {
 
 def entrenar_modelos_ml():
     global estado_ml
+    # Establecer mensaje descriptivo de entrenamiento en progreso
+    estado_ml["error"] = "El modelo se está entrenando en segundo plano con los últimos datos de SQLite. Por favor, espera unos segundos..."
     print("[ML] Iniciando entrenamiento de modelos de temperatura...")
     try:
         import pandas as pd
@@ -116,7 +118,8 @@ def entrenar_modelos_ml():
         lr.fit(X_train_s, y_train)
         pred_lr = lr.predict(X_test_s)
         
-        rf = RandomForestRegressor(n_estimators=50, random_state=42)
+        # Optimizado con n_jobs=-1 para entrenamiento paralelo veloz sobre millones de filas
+        rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
         rf.fit(X_train, y_train)
         pred_rf = rf.predict(X_test)
 
