@@ -11,6 +11,7 @@ import sys
 import sqlite3
 import numpy as np
 
+sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'weather_juliaca.db')
@@ -21,8 +22,7 @@ def cargar_datos():
         import pandas as pd
         df = pd.read_sql(
             """
-            SELECT hora_dia, dia_semana, humedad, presion,
-                   velocidad_viento, temperatura
+            SELECT timestamp, temperatura
             FROM eventos
             WHERE temperatura IS NOT NULL
             ORDER BY timestamp
@@ -45,9 +45,15 @@ def entrenar_modelo(df):
         from sklearn.metrics import mean_absolute_error, r2_score
         from sklearn.preprocessing import StandardScaler
 
+        # Parsear variables temporales a partir de timestamp
+        df['dt'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert('America/Lima')
+        df['hora_dia'] = df['dt'].dt.hour
+        df['dia_semana'] = df['dt'].dt.weekday
+        df['mes'] = df['dt'].dt.month
+        df['semana_anio'] = df['dt'].dt.isocalendar().week.astype(int)
+
         # Features y target
-        features = ["hora_dia", "dia_semana", "humedad",
-                    "presion", "velocidad_viento"]
+        features = ["hora_dia", "dia_semana", "mes", "semana_anio"]
         X = df[features].values
         y = df["temperatura"].values
 
@@ -92,11 +98,17 @@ def entrenar_modelo(df):
             bar = "█" * int(imp * 30)
             print(f"    {f:<20} {bar} {imp:.3f}")
 
-        # Predicción de ejemplo
-        hora_actual = __import__('datetime').datetime.now().hour
-        ejemplo = np.array([[hora_actual, 0, 70, 630, 2.0]])
+        # Predicción de ejemplo con fecha y hora actuales
+        import datetime
+        ahora = datetime.datetime.now()
+        hora_actual = ahora.hour
+        dia_semana_actual = ahora.weekday()
+        mes_actual = ahora.month
+        semana_actual = ahora.isocalendar()[1]
+
+        ejemplo = np.array([[hora_actual, dia_semana_actual, mes_actual, semana_actual]])
         pred = rf.predict(ejemplo)[0]
-        print(f"\n  Predicción ahora ({hora_actual}:00h):")
+        print(f"\n  Predicción ahora ({hora_actual:02d}:00h, día_semana={dia_semana_actual}, mes={mes_actual}, sem={semana_actual}):")
         print(f"    Temperatura estimada: {pred:.1f}°C")
         print("="*50)
 

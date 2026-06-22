@@ -76,8 +76,7 @@ def entrenar_modelos_ml():
         con = sqlite3.connect(db_path)
         df = pd.read_sql(
             """
-            SELECT hora_dia, dia_semana, humedad, presion,
-                   velocidad_viento, temperatura
+            SELECT timestamp, temperatura
             FROM eventos
             WHERE temperatura IS NOT NULL
             ORDER BY timestamp
@@ -94,7 +93,14 @@ def entrenar_modelos_ml():
             estado_ml["error"] = f"Se necesitan al menos 20 registros para entrenar. Actualmente hay {total} en la BD."
             return
 
-        features = ["hora_dia", "dia_semana", "humedad", "presion", "velocidad_viento"]
+        # Parsear variables temporales a partir de timestamp
+        df['dt'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert('America/Lima')
+        df['hora_dia'] = df['dt'].dt.hour
+        df['dia_semana'] = df['dt'].dt.weekday
+        df['mes'] = df['dt'].dt.month
+        df['semana_anio'] = df['dt'].dt.isocalendar().week.astype(int)
+
+        features = ["hora_dia", "dia_semana", "mes", "semana_anio"]
         X = df[features].values
         y = df["temperatura"].values
 
@@ -342,12 +348,11 @@ def api_predict():
     try:
         hora_dia = int(request.args.get("hora_dia", datetime.now().hour))
         dia_semana = int(request.args.get("dia_semana", datetime.now().weekday()))
-        humedad = int(request.args.get("humedad", 60))
-        presion = int(request.args.get("presion", 630))
-        velocidad_viento = float(request.args.get("velocidad_viento", 2.0))
+        mes = int(request.args.get("mes", datetime.now().month))
+        semana_anio = int(request.args.get("semana_anio", datetime.now().isocalendar()[1]))
 
         import numpy as np
-        X_in = np.array([[hora_dia, dia_semana, humedad, presion, velocidad_viento]])
+        X_in = np.array([[hora_dia, dia_semana, mes, semana_anio]])
 
         rf_model = estado_ml["modelo_rf"]
         pred_rf = round(float(rf_model.predict(X_in)[0]), 2)
@@ -362,9 +367,8 @@ def api_predict():
             "inputs": {
                 "hora_dia": hora_dia,
                 "dia_semana": dia_semana,
-                "humedad": humedad,
-                "presion": presion,
-                "velocidad_viento": velocidad_viento
+                "mes": mes,
+                "semana_anio": semana_anio
             },
             "predicciones": {
                 "random_forest": pred_rf,
@@ -497,7 +501,7 @@ h1 i { color: var(--amber); }
 .log-desc { color: var(--text-muted); }
 
 /* Form Controls for ML */
-.form-group { margin-bottom: 16px; }
+.form-group { margin-bottom: 18px; }
 .form-label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; }
 .form-label span.val { color: var(--amber); font-weight: 700; }
 .form-input-range { width: 100%; height: 6px; background: var(--border); border-radius: 4px; outline: none; -webkit-appearance: none; transition: background 0.2s; }
@@ -524,7 +528,7 @@ h1 i { color: var(--amber); }
 /* Features Importance simple bars */
 .feat-list { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .feat-item { display: flex; align-items: center; font-size: 12px; }
-.feat-name { width: 110px; color: var(--text-muted); font-weight: 500; text-transform: capitalize; }
+.feat-name { width: 130px; color: var(--text-muted); font-weight: 500; text-transform: capitalize; }
 .feat-bar-wrap { flex: 1; height: 8px; background: var(--bar-bg); border-radius: 4px; overflow: hidden; margin: 0 12px; }
 .feat-bar { height: 100%; background: var(--amber); border-radius: 4px; width: 0%; transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
 .feat-val { width: 40px; text-align: right; font-weight: 600; color: var(--text); }
@@ -653,43 +657,20 @@ h1 i { color: var(--amber); }
   <div class="row r2">
     <!-- Panel Izquierdo: Formularios -->
     <div class="panel">
-      <h2><i class="fa-solid fa-sliders" style="color:var(--amber)"></i> Ajuste de Variables Climatológicas</h2>
+      <h2><i class="fa-solid fa-calendar-days" style="color:var(--amber)"></i> Parámetros Temporales de Predicción</h2>
       
+      <div class="form-group">
+        <div class="form-label">Fecha a Estimar</div>
+        <input type="date" class="form-select" id="param-fecha">
+      </div>
+
       <div class="form-group">
         <div class="form-label">Hora del Día <span id="lbl-hora" class="val">12h</span></div>
         <input type="range" class="form-input-range" id="param-hora" min="0" max="23" value="12" oninput="updLbl('hora', this.value + 'h')">
       </div>
 
-      <div class="form-group">
-        <div class="form-label">Día de la Semana</div>
-        <select class="form-select" id="param-dia">
-          <option value="0">Lunes</option>
-          <option value="1">Martes</option>
-          <option value="2">Miércoles</option>
-          <option value="3">Jueves</option>
-          <option value="4">Viernes</option>
-          <option value="5">Sábado</option>
-          <option value="6">Domingo</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <div class="form-label">Humedad Relativa <span id="lbl-hum" class="val">60%</span></div>
-        <input type="range" class="form-input-range" id="param-hum" min="0" max="100" value="60" oninput="updLbl('hum', this.value + '%')">
-      </div>
-
-      <div class="form-group">
-        <div class="form-label">Presión Atmosférica <span id="lbl-pres" class="val">630 hPa</span></div>
-        <input type="range" class="form-input-range" id="param-pres" min="600" max="1000" value="630" oninput="updLbl('pres', this.value + ' hPa')">
-      </div>
-
-      <div class="form-group">
-        <div class="form-label">Velocidad del Viento <span id="lbl-viento" class="val">2.0 m/s</span></div>
-        <input type="range" class="form-input-range" id="param-viento" min="0" max="25" step="0.5" value="2" oninput="updLbl('viento', parseFloat(this.value).toFixed(1) + ' m/s')">
-      </div>
-
-      <div style="margin-top: 24px; display:flex; gap:12px;">
-        <button class="btn btn-primary" onclick="calcularPrediccion()" id="btn-calc"><i class="fa-solid fa-wand-magic-sparkles"></i> Estimar Temperatura</button>
+      <div style="margin-top: 36px;">
+        <button class="btn btn-primary" onclick="calcularPrediccion()" id="btn-calc"><i class="fa-solid fa-wand-magic-sparkles"></i> Predecir Temperatura</button>
       </div>
     </div>
 
@@ -727,7 +708,7 @@ h1 i { color: var(--amber); }
           </div>
         </div>
 
-        <h2><i class="fa-solid fa-chart-bar" style="color:var(--amber)"></i> Importancia de Características (Random Forest)</h2>
+        <h2><i class="fa-solid fa-chart-bar" style="color:var(--amber)"></i> Importancia del Factor Temporal (Random Forest)</h2>
         <div class="feat-list" id="feat-list-box">
           <!-- Dinámico -->
         </div>
@@ -782,9 +763,18 @@ function switchTab(tab) {
   }
 }
 
+// Configurar fecha de hoy en el input por defecto
+document.addEventListener("DOMContentLoaded", () => {
+  const today = new Date().toISOString().split('T')[0];
+  const dateInput = document.getElementById('param-fecha');
+  if (dateInput) {
+    dateInput.value = today;
+    dateInput.addEventListener('change', () => debounceCalcular());
+  }
+});
+
 function updLbl(id, val) {
   document.getElementById('lbl-' + id).textContent = val;
-  // Predicción en tiempo real al arrastrar sliders (opcional y premium)
   debounceCalcular();
 }
 
@@ -792,8 +782,17 @@ let debounceTimer;
 function debounceCalcular() {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
-    calcularPrediccion(true); // Modo silencioso sin overlay
+    calcularPrediccion(true); // Modo silencioso
   }, 150);
+}
+
+// Obtener semana ISO en JS
+function getWeekNumber(d) {
+  d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
+  var yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  var weekNo = Math.ceil(( ( (d - yearStart) / 86400000) + 1)/7);
+  return weekNo;
 }
 
 // Cargar estado inicial de ML
@@ -827,14 +826,13 @@ function cargarMLInfo() {
         const sorted = Object.entries(d.importancias).sort((a,b) => b[1] - a[1]);
         
         sorted.forEach(([k, v]) => {
-          const pct = (v * 100).toFixed(0);
           const friendlyNames = {
             "hora_dia": "Hora del Día",
-            "dia_semana": "Día de Semana",
-            "humedad": "Humedad",
-            "presion": "Presión",
-            "velocidad_viento": "Viento"
+            "dia_semana": "Día de la Semana",
+            "mes": "Mes del Año",
+            "semana_anio": "Semana del Año"
           };
+          const pct = (v * 100).toFixed(0);
           box.innerHTML += `
             <div class="feat-item">
               <span class="feat-name">${friendlyNames[k] || k}</span>
@@ -856,18 +854,31 @@ function cargarMLInfo() {
 // Calcular Predicción de Temperatura
 function calcularPrediccion(silencioso = false) {
   const loading = document.getElementById('ml-loading');
+  const alertDiv = document.getElementById('ml-alert-insuficiente');
+  if (alertDiv.style.display === 'block') return; // Si no hay datos suficientes, no calcula
+
   if (!silencioso) {
     document.getElementById('ml-loading-txt').textContent = 'Calculando estimación...';
     loading.style.display = 'flex';
   }
 
   const hora = document.getElementById('param-hora').value;
-  const dia = document.getElementById('param-dia').value;
-  const hum = document.getElementById('param-hum').value;
-  const pres = document.getElementById('param-pres').value;
-  const viento = document.getElementById('param-viento').value;
+  const rawDate = document.getElementById('param-fecha').value;
+  
+  if (!rawDate) {
+    if (!silencioso) loading.style.display = 'none';
+    return;
+  }
 
-  fetch(`/api/predict?hora_dia=${hora}&dia_semana=${dia}&humedad=${hum}&presion=${pres}&velocidad_viento=${viento}`)
+  // Parsear componentes de fecha en local para evitar descalces UTC
+  const parts = rawDate.split('-');
+  const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+
+  const mes = dateObj.getMonth() + 1;
+  const diaSemana = (dateObj.getDay() + 6) % 7; // Lunes 0, Domingo 6
+  const semanaAnio = getWeekNumber(dateObj);
+
+  fetch(`/api/predict?hora_dia=${hora}&dia_semana=${diaSemana}&mes=${mes}&semana_anio=${semanaAnio}`)
     .then(r => r.json())
     .then(d => {
       if (d.success) {
