@@ -45,15 +45,14 @@ lock = threading.Lock()
 estado_ml = {
     "entrenado": False,
     "error": "El modelo de ML aún no se ha inicializado.",
-    "mae_lr": None,
-    "r2_lr": None,
+    "mae_gb": None,
+    "r2_gb": None,
     "mae_rf": None,
     "r2_rf": None,
     "total_eventos": 0,
     "importancias": {},
     "modelo_rf": None,
-    "modelo_lr": None,
-    "scaler": None,
+    "modelo_gb": None,
 }
 
 def entrenar_modelos_ml():
@@ -64,11 +63,9 @@ def entrenar_modelos_ml():
     try:
         import pandas as pd
         import sqlite3
-        from sklearn.linear_model import LinearRegression
-        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error, r2_score
-        from sklearn.preprocessing import StandardScaler
         import numpy as np
 
         db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'weather_juliaca.db')
@@ -112,21 +109,17 @@ def entrenar_modelos_ml():
             X, y, test_size=0.2, random_state=42
         )
 
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_test_s  = scaler.transform(X_test)
-
-        lr = LinearRegression()
-        lr.fit(X_train_s, y_train)
-        pred_lr = lr.predict(X_test_s)
+        gb = HistGradientBoostingRegressor(random_state=42)
+        gb.fit(X_train, y_train)
+        pred_gb = gb.predict(X_test)
         
         # Optimizado con n_jobs=-1 para entrenamiento paralelo veloz sobre millones de filas
         rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
         rf.fit(X_train, y_train)
         pred_rf = rf.predict(X_test)
 
-        mae_lr = mean_absolute_error(y_test, pred_lr)
-        r2_lr = r2_score(y_test, pred_lr)
+        mae_gb = mean_absolute_error(y_test, pred_gb)
+        r2_gb = r2_score(y_test, pred_gb)
         mae_rf = mean_absolute_error(y_test, pred_rf)
         r2_rf = r2_score(y_test, pred_rf)
 
@@ -135,10 +128,9 @@ def entrenar_modelos_ml():
             importancias[f] = round(float(imp), 3)
 
         estado_ml["modelo_rf"] = rf
-        estado_ml["modelo_lr"] = lr
-        estado_ml["scaler"] = scaler
-        estado_ml["mae_lr"] = round(float(mae_lr), 2)
-        estado_ml["r2_lr"] = round(float(r2_lr), 3)
+        estado_ml["modelo_gb"] = gb
+        estado_ml["mae_gb"] = round(float(mae_gb), 2)
+        estado_ml["r2_gb"] = round(float(r2_gb), 3)
         estado_ml["mae_rf"] = round(float(mae_rf), 2)
         estado_ml["r2_rf"] = round(float(r2_rf), 3)
         estado_ml["importancias"] = importancias
@@ -153,14 +145,12 @@ def entrenar_modelos_ml():
         os.makedirs(ml_dir, exist_ok=True)
         with open(os.path.join(ml_dir, 'modelo_rf.pkl'), 'wb') as f:
             pickle.dump(rf, f)
-        with open(os.path.join(ml_dir, 'modelo_lr.pkl'), 'wb') as f:
-            pickle.dump(lr, f)
-        with open(os.path.join(ml_dir, 'scaler.pkl'), 'wb') as f:
-            pickle.dump(scaler, f)
+        with open(os.path.join(ml_dir, 'modelo_gb.pkl'), 'wb') as f:
+            pickle.dump(gb, f)
             
         meta = {
-            "mae_lr": estado_ml["mae_lr"],
-            "r2_lr": estado_ml["r2_lr"],
+            "mae_gb": estado_ml["mae_gb"],
+            "r2_gb": estado_ml["r2_gb"],
             "mae_rf": estado_ml["mae_rf"],
             "r2_rf": estado_ml["r2_rf"],
             "total_eventos": estado_ml["total_eventos"],
@@ -341,6 +331,152 @@ def stream():
     )
 
 
+@app.route("/api/monitoreo-historial")
+def api_monitoreo_historial():
+    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'weather_juliaca.db')
+    if not os.path.exists(db_path):
+        return jsonify({"success": False, "error": "La base de datos SQLite no existe."}), 400
+
+    try:
+        filtro = request.args.get("filtro", "hoy")  # hoy, semana, mes, anio
+        import sqlite3
+        con = sqlite3.connect(db_path)
+        cur = con.cursor()
+
+        if filtro == "hoy":
+            query_datos = """
+                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
+                       AVG(temperatura) as temp,
+                       AVG(presion) as pres
+                FROM eventos
+                WHERE date(timestamp, 'localtime') = date('now', 'localtime')
+                GROUP BY hr
+                ORDER BY hr ASC
+            """
+            query_heatmap = """
+                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
+                       AVG(temperatura) as temp,
+                       COUNT(*) as cnt
+                FROM eventos
+                WHERE date(timestamp, 'localtime') = date('now', 'localtime')
+                GROUP BY hr
+                ORDER BY hr ASC
+            """
+        elif filtro == "semana":
+            query_datos = """
+                SELECT date(timestamp, 'localtime') as dt,
+                       AVG(temperatura) as temp,
+                       AVG(presion) as pres
+                FROM eventos
+                WHERE timestamp >= datetime('now', '-7 days')
+                GROUP BY dt
+                ORDER BY dt ASC
+            """
+            query_heatmap = """
+                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
+                       AVG(temperatura) as temp,
+                       COUNT(*) as cnt
+                FROM eventos
+                WHERE timestamp >= datetime('now', '-7 days')
+                GROUP BY hr
+                ORDER BY hr ASC
+            """
+        elif filtro == "mes":
+            query_datos = """
+                SELECT date(timestamp, 'localtime') as dt,
+                       AVG(temperatura) as temp,
+                       AVG(presion) as pres
+                FROM eventos
+                WHERE timestamp >= datetime('now', '-30 days')
+                GROUP BY dt
+                ORDER BY dt ASC
+            """
+            query_heatmap = """
+                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
+                       AVG(temperatura) as temp,
+                       COUNT(*) as cnt
+                FROM eventos
+                WHERE timestamp >= datetime('now', '-30 days')
+                GROUP BY hr
+                ORDER BY hr ASC
+            """
+        elif filtro == "anio":
+            query_datos = """
+                SELECT strftime('%Y-%m', datetime(timestamp, 'localtime')) as mn,
+                       AVG(temperatura) as temp,
+                       AVG(presion) as pres
+                FROM eventos
+                WHERE timestamp >= datetime('now', '-365 days')
+                GROUP BY mn
+                ORDER BY mn ASC
+            """
+            query_heatmap = """
+                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
+                       AVG(temperatura) as temp,
+                       COUNT(*) as cnt
+                FROM eventos
+                WHERE timestamp >= datetime('now', '-365 days')
+                GROUP BY hr
+                ORDER BY hr ASC
+            """
+        else:
+            con.close()
+            return jsonify({"success": False, "error": f"Filtro desconocido: {filtro}"}), 400
+
+        cur.execute(query_datos)
+        rows = cur.fetchall()
+
+        labels = []
+        temps = []
+        presiones = []
+
+        meses_nombres = {
+            "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr",
+            "05": "May", "06": "Jun", "07": "Jul", "08": "Ago",
+            "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic"
+        }
+
+        for r in rows:
+            lbl = r[0]
+            if filtro == "hoy":
+                lbl = f"{int(lbl)}h"
+            elif filtro == "anio":
+                parts = lbl.split('-')
+                lbl = f"{meses_nombres.get(parts[1], parts[1])} {parts[0]}"
+            elif filtro in ["semana", "mes"]:
+                parts = lbl.split('-')
+                lbl = f"{parts[2]}/{parts[1]}"
+            
+            labels.append(lbl)
+            temps.append(round(r[1], 2) if r[1] is not None else 0.0)
+            presiones.append(round(r[2], 2) if r[2] is not None else 0.0)
+
+        cur.execute(query_heatmap)
+        rows_hm = cur.fetchall()
+        con.close()
+
+        heatmap_dict = {h: {"temp": None, "count": 0} for h in range(24)}
+        for r in rows_hm:
+            hr = int(r[0])
+            heatmap_dict[hr] = {
+                "temp": round(r[1], 2) if r[1] is not None else None,
+                "count": r[2]
+            }
+
+        heatmap_list = [{"h": h, **heatmap_dict[h]} for h in range(24)]
+
+        return jsonify({
+            "success": True,
+            "labels": labels,
+            "temperatura": temps,
+            "presion": presiones,
+            "heatmap": heatmap_list
+        })
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ─── Endpoints de Machine Learning ─────────────────────────────────────────────
 
 @app.route("/api/ml-info")
@@ -349,8 +485,8 @@ def api_ml_info():
         "entrenado": estado_ml["entrenado"],
         "error": estado_ml["error"],
         "total_eventos": estado_ml["total_eventos"],
-        "mae_lr": estado_ml["mae_lr"],
-        "r2_lr": estado_ml["r2_lr"],
+        "mae_gb": estado_ml["mae_gb"],
+        "r2_gb": estado_ml["r2_gb"],
         "mae_rf": estado_ml["mae_rf"],
         "r2_rf": estado_ml["r2_rf"],
         "importancias": estado_ml["importancias"]
@@ -386,10 +522,8 @@ def api_predict():
         rf_model = estado_ml["modelo_rf"]
         pred_rf = round(float(rf_model.predict(X_in)[0]), 2)
 
-        lr_model = estado_ml["modelo_lr"]
-        scaler = estado_ml["scaler"]
-        X_in_s = scaler.transform(X_in)
-        pred_lr = round(float(lr_model.predict(X_in_s)[0]), 2)
+        gb_model = estado_ml["modelo_gb"]
+        pred_gb = round(float(gb_model.predict(X_in)[0]), 2)
 
         return jsonify({
             "success": True,
@@ -401,61 +535,144 @@ def api_predict():
             },
             "predicciones": {
                 "random_forest": pred_rf,
-                "regresion_lineal": pred_lr
+                "gradient_boosting": pred_gb
             }
         })
     except Exception as e:
         return jsonify({"success": False, "error": f"Error al predecir: {str(e)}"}), 500
 
 
-@app.route("/api/predict-day")
-def api_predict_day():
+@app.route("/api/predict-trend")
+def api_predict_trend():
     if not estado_ml["entrenado"]:
         return jsonify({"success": False, "error": estado_ml["error"] or "El modelo predictivo no está listo."}), 400
 
     try:
-        dia_semana = int(request.args.get("dia_semana", datetime.now().weekday()))
-        mes = int(request.args.get("mes", datetime.now().month))
-        semana_anio = int(request.args.get("semana_anio", datetime.now().isocalendar()[1]))
-
+        modo = request.args.get("modo", "dia")  # dia, semana, mes, anio
+        hora_inicio = int(request.args.get("hora_inicio", 0))
+        hora_fin = int(request.args.get("hora_fin", 23))
+        
+        # Fecha base de la prediccion (ej. "2026-06-22")
+        fecha_str = request.args.get("fecha", datetime.now().strftime("%Y-%m-%d"))
+        fecha_base = datetime.strptime(fecha_str, "%Y-%m-%d")
+        
+        # Calcular variables temporales base
+        dia_semana_base = (fecha_base.weekday()) % 7  # 0 Lunes, 6 Domingo
+        mes_base = fecha_base.month
+        semana_anio_base = fecha_base.isocalendar()[1]
+        
         import numpy as np
-        # Generar las 24 horas del día (0 a 23)
-        horas = np.arange(24)
-        # Crear inputs: shape (24, 4) -> [hora, dia_semana, mes, semana_anio]
-        X_in = np.column_stack([
-            horas,
-            np.full(24, dia_semana),
-            np.full(24, mes),
-            np.full(24, semana_anio)
-        ])
-
         rf_model = estado_ml["modelo_rf"]
-        preds_rf = rf_model.predict(X_in).tolist()
-
-        lr_model = estado_ml["modelo_lr"]
-        scaler = estado_ml["scaler"]
-        X_in_s = scaler.transform(X_in)
-        preds_lr = lr_model.predict(X_in_s).tolist()
-
-        # Redondear predicciones
+        gb_model = estado_ml["modelo_gb"]
+        
+        # Validar horas
+        hora_inicio = max(0, min(23, hora_inicio))
+        hora_fin = max(0, min(23, hora_fin))
+        if hora_inicio > hora_fin:
+            hora_inicio, hora_fin = hora_fin, hora_inicio
+            
+        horas_rango = np.arange(hora_inicio, hora_fin + 1)
+        n_horas = len(horas_rango)
+        
+        if modo == "dia":
+            # Variar horas en el rango seleccionado
+            X_in = np.column_stack([
+                horas_rango,
+                np.full(n_horas, dia_semana_base),
+                np.full(n_horas, mes_base),
+                np.full(n_horas, semana_anio_base)
+            ])
+            labels = [f"{h:02d}:00h" for h in horas_rango]
+            
+            preds_rf = rf_model.predict(X_in).tolist()
+            preds_gb = gb_model.predict(X_in).tolist()
+            
+        elif modo == "semana":
+            # 7 dias de la semana. Promedia predicciones en el rango horario
+            grid = np.array([[h, d, mes_base, semana_anio_base] for d in range(7) for h in horas_rango])
+            preds_rf_all = rf_model.predict(grid).reshape(7, n_horas)
+            preds_gb_all = gb_model.predict(grid).reshape(7, n_horas)
+            
+            preds_rf = preds_rf_all.mean(axis=1).tolist()
+            preds_gb = preds_gb_all.mean(axis=1).tolist()
+            labels = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            
+        elif modo == "mes":
+            # Dias del mes de la fecha seleccionada
+            import calendar
+            _, num_dias = calendar.monthrange(fecha_base.year, mes_base)
+            
+            grid_list = []
+            for d in range(1, num_dias + 1):
+                date_d = datetime(fecha_base.year, mes_base, d)
+                weekday_d = date_d.weekday()
+                week_d = date_d.isocalendar()[1]
+                for h in horas_rango:
+                    grid_list.append([h, weekday_d, mes_base, week_d])
+                    
+            grid = np.array(grid_list)
+            preds_rf_all = rf_model.predict(grid).reshape(num_dias, n_horas)
+            preds_gb_all = gb_model.predict(grid).reshape(num_dias, n_horas)
+            
+            preds_rf = preds_rf_all.mean(axis=1).tolist()
+            preds_gb = preds_gb_all.mean(axis=1).tolist()
+            labels = [f"Día {d}" for d in range(1, num_dias + 1)]
+            
+        elif modo == "anio":
+            # 12 meses. semanas de referencia:
+            semanas_mes = [2, 6, 11, 15, 20, 24, 28, 33, 37, 41, 46, 50]
+            
+            grid_list = []
+            for m in range(1, 13):
+                for d in range(7):
+                    for h in horas_rango:
+                        grid_list.append([h, d, m, semanas_mes[m-1]])
+                        
+            grid = np.array(grid_list)
+            preds_rf_all = rf_model.predict(grid).reshape(12, 7 * n_horas)
+            preds_gb_all = gb_model.predict(grid).reshape(12, 7 * n_horas)
+            
+            preds_rf = preds_rf_all.mean(axis=1).tolist()
+            preds_gb = preds_gb_all.mean(axis=1).tolist()
+            labels = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        else:
+            return jsonify({"success": False, "error": f"Modo desconocido: {modo}"}), 400
+            
         preds_rf = [round(float(p), 2) for p in preds_rf]
-        preds_lr = [round(float(p), 2) for p in preds_lr]
-
+        preds_gb = [round(float(p), 2) for p in preds_gb]
+        
+        # Estadísticas agregadas
+        avg_rf = round(float(np.mean(preds_rf)), 2)
+        min_rf = round(float(np.min(preds_rf)), 2)
+        max_rf = round(float(np.max(preds_rf)), 2)
+        
+        avg_gb = round(float(np.mean(preds_gb)), 2)
+        min_gb = round(float(np.min(preds_gb)), 2)
+        max_gb = round(float(np.max(preds_gb)), 2)
+        
         return jsonify({
             "success": True,
             "inputs": {
-                "dia_semana": dia_semana,
-                "mes": mes,
-                "semana_anio": semana_anio
+                "modo": modo,
+                "hora_inicio": hora_inicio,
+                "hora_fin": hora_fin,
+                "fecha": fecha_str,
+                "dia_semana_base": dia_semana_base,
+                "mes_base": mes_base,
+                "semana_anio_base": semana_anio_base
             },
-            "horas": horas.tolist(),
+            "labels": labels,
             "predicciones": {
                 "random_forest": preds_rf,
-                "regresion_lineal": preds_lr
+                "gradient_boosting": preds_gb
+            },
+            "stats": {
+                "random_forest": {"avg": avg_rf, "min": min_rf, "max": max_rf},
+                "gradient_boosting": {"avg": avg_gb, "min": min_gb, "max": max_gb}
             }
         })
     except Exception as e:
-        return jsonify({"success": False, "error": f"Error al predecir el día: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"Error al predecir la tendencia: {str(e)}"}), 500
 
 
 def cargar_modelos_ml():
@@ -465,26 +682,22 @@ def cargar_modelos_ml():
         import json
         ml_dir = os.path.join(os.path.dirname(__file__), '..', 'ml')
         path_rf = os.path.join(ml_dir, 'modelo_rf.pkl')
-        path_lr = os.path.join(ml_dir, 'modelo_lr.pkl')
-        path_scaler = os.path.join(ml_dir, 'scaler.pkl')
+        path_gb = os.path.join(ml_dir, 'modelo_gb.pkl')
         path_meta = os.path.join(ml_dir, 'model_metadata.json')
 
-        if os.path.exists(path_rf) and os.path.exists(path_lr) and os.path.exists(path_scaler) and os.path.exists(path_meta):
+        if os.path.exists(path_rf) and os.path.exists(path_gb) and os.path.exists(path_meta):
             print("[ML] Cargando modelos persistidos desde disco...")
             with open(path_rf, 'rb') as f:
                 rf = pickle.load(f)
-            with open(path_lr, 'rb') as f:
-                lr = pickle.load(f)
-            with open(path_scaler, 'rb') as f:
-                scaler = pickle.load(f)
+            with open(path_gb, 'rb') as f:
+                gb = pickle.load(f)
             with open(path_meta, 'r', encoding='utf-8') as f:
                 meta = json.load(f)
 
             estado_ml["modelo_rf"] = rf
-            estado_ml["modelo_lr"] = lr
-            estado_ml["scaler"] = scaler
-            estado_ml["mae_lr"] = meta["mae_lr"]
-            estado_ml["r2_lr"] = meta["r2_lr"]
+            estado_ml["modelo_gb"] = gb
+            estado_ml["mae_gb"] = meta["mae_gb"]
+            estado_ml["r2_gb"] = meta["r2_gb"]
             estado_ml["mae_rf"] = meta["mae_rf"]
             estado_ml["r2_rf"] = meta["r2_rf"]
             estado_ml["importancias"] = meta["importancias"]
@@ -645,7 +858,7 @@ h1 i { color: var(--amber); }
 @media(max-width:450px){ .ml-results { grid-template-columns: 1fr; } }
 .ml-res-card { padding: 20px; border-radius: 16px; border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: relative; overflow: hidden; background: var(--bg2); box-shadow: var(--card-shadow); }
 .ml-res-card.rf { border-left: 4px solid var(--purple); background: linear-gradient(180deg, var(--purple-bg) 0%, var(--bg2) 100%); }
-.ml-res-card.lr { border-left: 4px solid var(--blue); background: linear-gradient(180deg, var(--blue-bg) 0%, var(--bg2) 100%); }
+.ml-res-card.gb { border-left: 4px solid var(--green); background: linear-gradient(180deg, var(--green-bg) 0%, var(--bg2) 100%); }
 .ml-res-val { font-size: 40px; font-weight: 700; letter-spacing: -1px; margin: 8px 0; }
 .ml-res-title { font-size: 12px; text-transform: uppercase; font-weight: 700; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
 
@@ -701,6 +914,22 @@ h1 i { color: var(--amber); }
 
 <!-- ───────────────── TAB: MONITOREO ───────────────── -->
 <div id="section-monitoreo" class="tab-content active">
+  <!-- Selector Temporal General de Monitoreo -->
+  <div class="row" style="margin-bottom: 20px;">
+    <div class="panel" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-radius: 12px; flex-wrap: wrap; gap: 10px; width: 100%;">
+      <div style="font-weight: 600; font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: .05em;">
+        <i class="fa-solid fa-clock-rotate-left" style="color: var(--amber);"></i> Filtro Temporal del Monitoreo
+      </div>
+      <select class="form-select" id="monitoreo-filtro" style="width: auto; padding: 6px 12px; margin: 0; font-size: 13px;" onchange="cambiarFiltroMonitoreo(this.value)">
+        <option value="vivo" selected>Tiempo Real (En Vivo)</option>
+        <option value="hoy">Hoy (24 Horas)</option>
+        <option value="semana">Esta Semana (7 Días)</option>
+        <option value="mes">Este Mes (30 Días)</option>
+        <option value="anio">Este Año (12 Meses)</option>
+      </select>
+    </div>
+  </div>
+
   <!-- Row: Gauges -->
   <div class="row r2">
     <div class="panel">
@@ -784,13 +1013,29 @@ h1 i { color: var(--amber); }
       <h2><i class="fa-solid fa-calendar-days" style="color:var(--amber)"></i> Parámetros Temporales de Predicción</h2>
       
       <div class="form-group">
+        <div class="form-label">Rango de Visualización</div>
+        <select class="form-select" id="ml-chart-modo" onchange="cambiarModoGrafico(this.value)">
+          <option value="dia" selected>Día (Por Horas)</option>
+          <option value="semana">Semana (Por Días)</option>
+          <option value="mes">Mes (Por Días del Mes)</option>
+          <option value="anio">Año (Por Meses)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
         <div class="form-label">Fecha a Estimar</div>
         <input type="date" class="form-select" id="param-fecha">
       </div>
 
-      <div class="form-group">
-        <div class="form-label">Hora del Día <span id="lbl-hora" class="val">12h</span></div>
-        <input type="range" class="form-input-range" id="param-hora" min="0" max="23" value="12" oninput="updLbl('hora', this.value + 'h')">
+      <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div>
+          <div class="form-label">Desde las</div>
+          <select class="form-select" id="param-hora-inicio" onchange="updHras()"></select>
+        </div>
+        <div>
+          <div class="form-label">Hasta las</div>
+          <select class="form-select" id="param-hora-fin" onchange="updHras()"></select>
+        </div>
       </div>
 
       <div style="margin-top: 36px;">
@@ -823,12 +1068,12 @@ h1 i { color: var(--amber); }
           <div class="ml-res-card rf">
             <div class="ml-res-title"><i class="fa-solid fa-tree" style="color:var(--purple)"></i> Random Forest</div>
             <div class="ml-res-val" id="pred-val-rf">—°C</div>
-            <div style="font-size:11px; color:var(--text-muted)">Modelo no-lineal (Ensamble)</div>
+            <div id="pred-sub-rf" style="font-size:11px; color:var(--text-muted); margin-bottom: 4px;">Modelo no-lineal (Ensamble)</div>
           </div>
-          <div class="ml-res-card lr">
-            <div class="ml-res-title"><i class="fa-solid fa-chart-line" style="color:var(--blue)"></i> Regresión Lineal</div>
-            <div class="ml-res-val" id="pred-val-lr">—°C</div>
-            <div style="font-size:11px; color:var(--text-muted)">Modelo lineal (Normalizado)</div>
+          <div class="ml-res-card gb">
+            <div class="ml-res-title"><i class="fa-solid fa-chart-line" style="color:var(--green)"></i> Gradient Boosting</div>
+            <div class="ml-res-val" id="pred-val-gb">—°C</div>
+            <div id="pred-sub-gb" style="font-size:11px; color:var(--text-muted); margin-bottom: 4px;">Ensamble secuencial (HistGB)</div>
           </div>
         </div>
 
@@ -853,9 +1098,9 @@ h1 i { color: var(--amber); }
               <td id="metric-r2-rf">—</td>
             </tr>
             <tr>
-              <td style="color:var(--blue); font-weight:700;">Regresión Lineal</td>
-              <td id="metric-mae-lr">—</td>
-              <td id="metric-r2-lr">—</td>
+              <td style="color:var(--green); font-weight:700;">Gradient Boosting</td>
+              <td id="metric-mae-gb">—</td>
+              <td id="metric-r2-gb">—</td>
             </tr>
           </tbody>
         </table>
@@ -873,7 +1118,7 @@ h1 i { color: var(--amber); }
   <!-- Nuevo Panel: Gráfico 24h de Variación -->
   <div class="row r2" style="margin-top: 24px;" id="ml-chart-container">
     <div class="panel" style="flex: 1; width: 100%;">
-      <h2><i class="fa-solid fa-chart-line" style="color:var(--amber)"></i> Curva de Temperatura Estimada para el Día Seleccionado (24h)</h2>
+      <h2><i class="fa-solid fa-chart-line" style="color:var(--amber)"></i> Curva de Temperatura Estimada</h2>
       <div style="position: relative; height: 220px; width: 100%;">
         <canvas id="chart-ml-24h"></canvas>
       </div>
@@ -899,6 +1144,7 @@ function switchTab(tab) {
 
 let cML24hLine = null;
 let cachePredicciones = null;
+let graficoModo = 'dia'; // 'dia', 'semana', 'mes', 'anio'
 
 function initMLChart() {
   const ctx = document.getElementById('chart-ml-24h');
@@ -907,7 +1153,7 @@ function initMLChart() {
   cML24hLine = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: Array.from({length: 24}, (_, i) => `${i}:00h`),
+      labels: [],
       datasets: [
         {
           label: 'Random Forest',
@@ -922,16 +1168,15 @@ function initMLChart() {
           pointBackgroundColor: '#a855f7'
         },
         {
-          label: 'Regresión Lineal',
+          label: 'Gradient Boosting',
           data: [],
-          borderColor: '#3b82f6', // blue
-          backgroundColor: 'transparent',
-          borderDash: [5, 5],
-          tension: 0.15,
-          borderWidth: 2,
+          borderColor: '#10b981', // green
+          backgroundColor: 'rgba(16, 185, 129, 0.05)',
+          tension: 0.4,
+          borderWidth: 2.5,
           pointRadius: 3,
           pointHoverRadius: 5,
-          pointBackgroundColor: '#3b82f6'
+          pointBackgroundColor: '#10b981'
         }
       ]
     },
@@ -960,7 +1205,7 @@ function initMLChart() {
   });
 }
 
-// Configurar fecha de hoy en el input por defecto
+// Configurar fecha de hoy en el input por defecto y poblar selectores
 document.addEventListener("DOMContentLoaded", () => {
   const today = new Date().toISOString().split('T')[0];
   const dateInput = document.getElementById('param-fecha');
@@ -971,12 +1216,51 @@ document.addEventListener("DOMContentLoaded", () => {
       debounceCalcular();
     });
   }
+  
+  // Poblar selectores de hora inicio y fin
+  const startSel = document.getElementById('param-hora-inicio');
+  const endSel = document.getElementById('param-hora-fin');
+  if (startSel && endSel) {
+    for (let h = 0; h < 24; h++) {
+      const opt1 = document.createElement('option');
+      opt1.value = h;
+      opt1.textContent = `${h.toString().padStart(2, '0')}:00h`;
+      if (h === 0) opt1.selected = true;
+      startSel.appendChild(opt1);
+      
+      const opt2 = document.createElement('option');
+      opt2.value = h;
+      opt2.textContent = `${h.toString().padStart(2, '0')}:00h`;
+      if (h === 23) opt2.selected = true;
+      endSel.appendChild(opt2);
+    }
+  }
+  
   initMLChart();
 });
 
-function updLbl(id, val) {
-  document.getElementById('lbl-' + id).textContent = val;
+function updHras() {
+  const startSel = document.getElementById('param-hora-inicio');
+  const endSel = document.getElementById('param-hora-fin');
+  if (startSel && endSel) {
+    let start = parseInt(startSel.value);
+    let end = parseInt(endSel.value);
+    if (start > end) {
+      endSel.value = start;
+    }
+  }
+  cachePredicciones = null;
   debounceCalcular();
+}
+
+function cambiarModoGrafico(modo) {
+  graficoModo = modo;
+  cachePredicciones = null; // Invalida caché al cambiar modo
+  debounceCalcular();
+}
+
+function updLbl(id, val) {
+  // Mantener por compatibilidad si es necesario
 }
 
 let debounceTimer;
@@ -1018,17 +1302,15 @@ function cargarMLInfo() {
         // Cargar métricas
         document.getElementById('metric-mae-rf').textContent = d.mae_rf + ' °C';
         document.getElementById('metric-r2-rf').textContent = d.r2_rf;
-        document.getElementById('metric-mae-lr').textContent = d.mae_lr + ' °C';
-        document.getElementById('metric-r2-lr').textContent = d.r2_lr;
+        document.getElementById('metric-mae-gb').textContent = d.mae_gb + ' °C';
+        document.getElementById('metric-r2-gb').textContent = d.r2_gb;
         document.getElementById('ml-total-txt').textContent = `Datos de entrenamiento: ${d.total_eventos} eventos históricos (80% entrenamiento, 20% test).`;
         
         // Pintar importancias
         const box = document.getElementById('feat-list-box');
         box.innerHTML = '';
         
-        // Ordenar variables por importancia
         const sorted = Object.entries(d.importancias).sort((a,b) => b[1] - a[1]);
-        
         sorted.forEach(([k, v]) => {
           const friendlyNames = {
             "hora_dia": "Hora del Día",
@@ -1048,7 +1330,6 @@ function cargarMLInfo() {
           `;
         });
 
-        // Hacer una predicción inicial silenciosa
         calcularPrediccion(true);
       }
     })
@@ -1061,69 +1342,82 @@ function calcularPrediccion(silencioso = false) {
   const alertDiv = document.getElementById('ml-alert-insuficiente');
   if (alertDiv.style.display === 'block') return; // Si no hay datos suficientes, no calcula
 
-  const hora = parseInt(document.getElementById('param-hora').value);
+  const startSel = document.getElementById('param-hora-inicio');
+  const endSel = document.getElementById('param-hora-fin');
   const rawDate = document.getElementById('param-fecha').value;
   
-  if (!rawDate) {
+  if (!rawDate || !startSel || !endSel) {
     if (!silencioso) loading.style.display = 'none';
     return;
   }
 
-  // Parsear componentes de fecha en local para evitar descalces UTC
-  const parts = rawDate.split('-');
-  const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+  const horaInicio = parseInt(startSel.value);
+  const horaFin = parseInt(endSel.value);
 
-  const mes = dateObj.getMonth() + 1;
-  const diaSemana = (dateObj.getDay() + 6) % 7; // Lunes 0, Domingo 6
-  const semanaAnio = getWeekNumber(dateObj);
-
-  // Clave única de caché para el día seleccionado
-  const cacheKey = `${diaSemana}-${mes}-${semanaAnio}`;
+  // Clave única de caché
+  const cacheKey = `${graficoModo}-${horaInicio}-${horaFin}-${rawDate}`;
 
   if (cachePredicciones && cachePredicciones.key === cacheKey) {
-    // Usar datos ya cargados en caché (evita peticiones de red al arrastrar el slider de hora)
-    const predsRF = cachePredicciones.rf;
-    const predsLR = cachePredicciones.lr;
-    
-    document.getElementById('pred-val-rf').textContent = predsRF[hora].toFixed(1) + ' °C';
-    document.getElementById('pred-val-lr').textContent = predsLR[hora].toFixed(1) + ' °C';
+    aplicarPredicciones(cachePredicciones.data);
     return;
   }
 
   if (!silencioso) {
-    document.getElementById('ml-loading-txt').textContent = 'Calculando curva de estimación...';
+    document.getElementById('ml-loading-txt').textContent = 'Calculando tendencia...';
     loading.style.display = 'flex';
   }
 
-  fetch(`/api/predict-day?dia_semana=${diaSemana}&mes=${mes}&semana_anio=${semanaAnio}`)
+  fetch(`/api/predict-trend?modo=${graficoModo}&hora_inicio=${horaInicio}&hora_fin=${horaFin}&fecha=${rawDate}`)
     .then(r => r.json())
     .then(d => {
       if (d.success) {
-        const predsRF = d.predicciones.random_forest;
-        const predsLR = d.predicciones.regresion_lineal;
-        
-        // Guardar en caché
         cachePredicciones = {
           key: cacheKey,
-          rf: predsRF,
-          lr: predsLR
+          data: d
         };
-
-        // Actualizar gráfico de líneas
-        if (cML24hLine) {
-          cML24hLine.data.datasets[0].data = predsRF;
-          cML24hLine.data.datasets[1].data = predsLR;
-          cML24hLine.update();
-        }
-
-        // Actualizar tarjetas de predicción para la hora seleccionada
-        document.getElementById('pred-val-rf').textContent = predsRF[hora].toFixed(1) + ' °C';
-        document.getElementById('pred-val-lr').textContent = predsLR[hora].toFixed(1) + ' °C';
+        aplicarPredicciones(d);
       }
     })
     .finally(() => {
       if (!silencioso) loading.style.display = 'none';
     });
+}
+
+function aplicarPredicciones(d) {
+  const predsRF = d.predicciones.random_forest;
+  const predsGB = d.predicciones.gradient_boosting;
+  const labels = d.labels;
+
+  if (cML24hLine) {
+    cML24hLine.data.labels = labels;
+    cML24hLine.data.datasets[0].data = predsRF;
+    cML24hLine.data.datasets[1].data = predsGB;
+    cML24hLine.update();
+  }
+
+  const start = d.inputs.hora_inicio;
+  const end = d.inputs.hora_fin;
+
+  if (d.inputs.modo === 'dia') {
+    if (start === end) {
+      document.getElementById('pred-val-rf').textContent = predsRF[0].toFixed(1) + ' °C';
+      document.getElementById('pred-val-gb').textContent = predsGB[0].toFixed(1) + ' °C';
+      document.getElementById('pred-sub-rf').textContent = 'Estimación horaria';
+      document.getElementById('pred-sub-gb').textContent = 'Estimación horaria';
+    } else {
+      document.getElementById('pred-val-rf').textContent = d.stats.random_forest.avg.toFixed(1) + ' °C';
+      document.getElementById('pred-val-gb').textContent = d.stats.gradient_boosting.avg.toFixed(1) + ' °C';
+      document.getElementById('pred-sub-rf').textContent = `Promedio (Mín: ${d.stats.random_forest.min}° / Máx: ${d.stats.random_forest.max}°)`;
+      document.getElementById('pred-sub-gb').textContent = `Promedio (Mín: ${d.stats.gradient_boosting.min}° / Máx: ${d.stats.gradient_boosting.max}°)`;
+    }
+  } else {
+    document.getElementById('pred-val-rf').textContent = d.stats.random_forest.avg.toFixed(1) + ' °C';
+    document.getElementById('pred-val-gb').textContent = d.stats.gradient_boosting.avg.toFixed(1) + ' °C';
+    
+    const labelModo = d.inputs.modo === 'semana' ? 'semanal' : (d.inputs.modo === 'mes' ? 'mensual' : 'anual');
+    document.getElementById('pred-sub-rf').textContent = `Tendencia ${labelModo} (Mín: ${d.stats.random_forest.min}° / Máx: ${d.stats.random_forest.max}°)`;
+    document.getElementById('pred-sub-gb').textContent = `Tendencia ${labelModo} (Mín: ${d.stats.gradient_boosting.min}° / Máx: ${d.stats.gradient_boosting.max}°)`;
+  }
 }
 
 // Re-entrenar modelo
@@ -1216,6 +1510,7 @@ function mkLine(id, color, min, max) {
   });
 }
 
+let monitoreoModo = 'vivo';
 let cGaugeTemp, cGaugeHum, cTempLine, cPresLine;
 setTimeout(() => {
     cGaugeTemp = mkGauge('gauge-temp', '#f59e0b', 30); // Max temp gauge ~30
@@ -1256,6 +1551,41 @@ function updLine(chart, serie) {
   chart.data.labels = pts.map(p => p.ts);
   chart.data.datasets[0].data = pts.map(p => p.v);
   chart.update('none');
+}
+
+function cambiarFiltroMonitoreo(filtro) {
+  monitoreoModo = filtro;
+  if (filtro === 'vivo') {
+    fetch('/api/estado')
+      .then(r => r.json())
+      .then(d => {
+        aplicar(d);
+      })
+      .catch(() => {});
+  } else {
+    fetch(`/api/monitoreo-historial?filtro=${filtro}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          if (cTempLine) {
+            cTempLine.data.labels = d.labels;
+            cTempLine.data.datasets[0].data = d.temperatura;
+            cTempLine.update('none');
+          }
+          if (cPresLine) {
+            cPresLine.data.labels = d.labels;
+            cPresLine.data.datasets[0].data = d.presion;
+            cPresLine.update('none');
+          }
+          if (d.heatmap) {
+            d.heatmap.forEach(h => {
+              if (hmCells[h.h]) hmCells[h.h].style.background = tempColor(h.temp);
+            });
+          }
+        }
+      })
+      .catch(() => {});
+  }
 }
 
 // App Logic
@@ -1300,13 +1630,14 @@ function aplicar(d) {
     document.getElementById('m-lat-t').textContent = d.lat_prom > 5000 ? 'Lenta' : 'Óptima';
   }
 
-  if (d.heatmap) {
-    d.heatmap.forEach(h => { if(hmCells[h.h]) hmCells[h.h].style.background = tempColor(h.temp); });
+  if (monitoreoModo === 'vivo') {
+    if (d.heatmap) {
+      d.heatmap.forEach(h => { if(hmCells[h.h]) hmCells[h.h].style.background = tempColor(h.temp); });
+    }
+    // Update Line Charts
+    if (d.serie) updLine(cTempLine, d.serie);
+    if (d.presion_serie) updLine(cPresLine, d.presion_serie);
   }
-
-  // Update Line Charts
-  if (d.serie) updLine(cTempLine, d.serie);
-  if (d.presion_serie) updLine(cPresLine, d.presion_serie);
 
   if (d.log && d.log.length) {
     document.getElementById('log-box').innerHTML = d.log.map(e =>

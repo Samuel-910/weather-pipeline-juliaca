@@ -39,11 +39,9 @@ def cargar_datos():
 def entrenar_modelo(df):
     try:
         import pandas as pd
-        from sklearn.linear_model import LinearRegression
-        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error, r2_score
-        from sklearn.preprocessing import StandardScaler
 
         # Parsear variables temporales a partir de timestamp
         df['dt'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert('America/Lima')
@@ -61,23 +59,19 @@ def entrenar_modelo(df):
             X, y, test_size=0.2, random_state=42
         )
 
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_test_s  = scaler.transform(X_test)
-
         print("\n" + "="*50)
         print("  Entrenamiento de modelos — Juliaca")
         print("="*50)
 
-        # Regresión lineal
-        lr = LinearRegression()
-        lr.fit(X_train_s, y_train)
-        pred_lr = lr.predict(X_test_s)
-        mae_lr  = mean_absolute_error(y_test, pred_lr)
-        r2_lr   = r2_score(y_test, pred_lr)
-        print(f"\n  Regresión Lineal:")
-        print(f"    MAE = {mae_lr:.2f}°C")
-        print(f"    R²  = {r2_lr:.3f}")
+        # Hist Gradient Boosting (Optimizado para grandes volúmenes de datos)
+        gb = HistGradientBoostingRegressor(random_state=42)
+        gb.fit(X_train, y_train)
+        pred_gb = gb.predict(X_test)
+        mae_gb  = mean_absolute_error(y_test, pred_gb)
+        r2_gb   = r2_score(y_test, pred_gb)
+        print(f"\n  Gradient Boosting:")
+        print(f"    MAE = {mae_gb:.2f}°C")
+        print(f"    R²  = {r2_gb:.3f}")
 
         # Random Forest (Optimizado con n_jobs=-1 para entrenamiento paralelo)
         rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
@@ -89,7 +83,7 @@ def entrenar_modelo(df):
         print(f"    MAE = {mae_rf:.2f}°C")
         print(f"    R²  = {r2_rf:.3f}")
 
-        # Importancia de features
+        # Importancia de features (Random Forest)
         print(f"\n  Importancia de features (Random Forest):")
         for f, imp in sorted(
             zip(features, rf.feature_importances_),
@@ -109,25 +103,25 @@ def entrenar_modelo(df):
         ejemplo = np.array([[hora_actual, dia_semana_actual, mes_actual, semana_actual]])
         pred = rf.predict(ejemplo)[0]
         print(f"\n  Predicción ahora ({hora_actual:02d}:00h, día_semana={dia_semana_actual}, mes={mes_actual}, sem={semana_actual}):")
-        print(f"    Temperatura estimada: {pred:.1f}°C")
+        print(f"    Temperatura estimada (Random Forest): {pred:.1f}°C")
+        print("="*50)
+
         # Guardar modelos y metadatos a disco para carga instantánea
         import pickle
         import json
         ml_dir = os.path.dirname(__file__)
         with open(os.path.join(ml_dir, 'modelo_rf.pkl'), 'wb') as f:
             pickle.dump(rf, f)
-        with open(os.path.join(ml_dir, 'modelo_lr.pkl'), 'wb') as f:
-            pickle.dump(lr, f)
-        with open(os.path.join(ml_dir, 'scaler.pkl'), 'wb') as f:
-            pickle.dump(scaler, f)
+        with open(os.path.join(ml_dir, 'modelo_gb.pkl'), 'wb') as f:
+            pickle.dump(gb, f)
             
         importancias_dict = {}
         for f_name, imp in zip(features, rf.feature_importances_):
             importancias_dict[f_name] = round(float(imp), 3)
 
         meta = {
-            "mae_lr": round(float(mae_lr), 2),
-            "r2_lr": round(float(r2_lr), 3),
+            "mae_gb": round(float(mae_gb), 2),
+            "r2_gb": round(float(r2_gb), 3),
             "mae_rf": round(float(mae_rf), 2),
             "r2_rf": round(float(r2_rf), 3),
             "total_eventos": len(df),
@@ -137,7 +131,7 @@ def entrenar_modelo(df):
             json.dump(meta, f, ensure_ascii=False, indent=2)
         print("  Modelos y metadata persistidos en disco con éxito.")
 
-        return rf, scaler
+        return rf, gb
 
     except ImportError:
         print("Instalar: pip install scikit-learn pandas")

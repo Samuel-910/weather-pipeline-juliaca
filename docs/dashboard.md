@@ -54,7 +54,7 @@ El frontend está estructurado en una sola plantilla HTML/CSS e incluye las sigu
 - **Mapa de Calor 24h**: Una cuadrícula con 24 celdas correspondiente a las horas del día. Cada celda se colorea de manera dinámica en base a la temperatura promedio registrada a esa hora, pasando de tonos azules (clima frío, < 8°C) a amarillos y rojos (clima cálido).
 - **Log de Terminal**: Caja de texto que actúa como consola mostrando el flujo de mensajes recibidos con su respectivo timestamp, temperatura, humedad, viento y estado atmosférico general.
 - **Selector de Tema Claro/Oscuro**: Botón que alterna la paleta de colores y actualiza los bordes y textos de los gráficos de Chart.js dinámicamente.
-- **Simulador de Machine Learning**: Una pestaña interactiva que alberga controles (selector de fecha y slider de hora del día) conectados a la API predictiva. Permite evaluar de manera directa estimaciones térmicas en base a los modelos (calculando automáticamente el día de la semana, el mes y la semana del año correspondientes) e incorpora gráficos dinámicos de importancia de variables calculados en caliente por Random Forest.
+- **Simulador de Machine Learning**: Una pestaña interactiva que alberga controles (selector de fecha y selectores de rango de horas) conectados a la API predictiva. Permite evaluar tendencias térmicas de forma dinámica bajo cuatro resoluciones temporales (Día, Semana, Mes, Año) y medir el comportamiento de rangos de horas específicos, mostrando promedios, mínimos y máximos estimados. Incorpora gráficos dinámicos de importancia de variables calculados en caliente por Random Forest y curvas predictivas no lineales actualizadas con caché.
 
 ---
 
@@ -69,9 +69,9 @@ Retorna el estado de entrenamiento actual del modelo, el error absoluto medio (M
 Calcula y devuelve las predicciones de temperatura de forma dinámica basadas en los parámetros temporales pasados en la URL:
 `http://localhost:5000/api/predict?hora_dia=12&dia_semana=0&mes=6&semana_anio=26`
 
-### C. Endpoint `/api/predict-day`
-Calcula y devuelve las predicciones de temperatura para las 24 horas del día (lote de 0 a 23) basadas en la fecha (día de la semana, mes, y semana del año) pasada en la URL. Esto permite trazar curvas térmicas de 24h de forma extremadamente rápida:
-`http://localhost:5000/api/predict-day?dia_semana=0&mes=6&semana_anio=26`
+### C. Endpoint `/api/predict-trend`
+Calcula y devuelve las predicciones de temperatura para un rango temporal determinado (`dia`, `semana`, `mes` o `anio`) y un rango de horas (de `hora_inicio` a `hora_fin`) basándose en una fecha de referencia:
+`http://localhost:5000/api/predict-trend?modo=dia&hora_inicio=7&hora_fin=12&fecha=2026-06-22`
 
 ### D. Endpoint `/api/ml-retrain`
 Forza un re-entrenamiento del modelo directamente desde la interfaz web, lo que permite al analista actualizar los coeficientes y mejorar la precisión del modelo en caliente una vez que el pipeline ha guardado nuevos datos en SQLite.

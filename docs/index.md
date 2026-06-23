@@ -31,7 +31,7 @@ graph TD
 
     subgraph ConsumoML["4. Modelado y Visualizacion"]
         DB -->|"Pandas read_sql"| ML["Machine Learning modelo_temperatura.py"]
-        ML -->|"Random Forest y Regresion Lineal"| Pred["Predicción de Temperatura"]
+        ML -->|"Random Forest y Gradient Boosting"| Pred["Predicción de Temperatura"]
         
         Kafka -->|"Consumo en tiempo real"| Dash["Flask Web App app.py"]
         Dash -->|"Server-Sent Events SSE"| Web["Navegador Dashboard Chart.js"]
@@ -64,7 +64,7 @@ graph TD
 2. **Procesamiento en Tiempo Real (S7)**: Un Job de Spark Structured Streaming que lee los datos climáticos en tiempo real, aplica agregaciones basadas en ventanas de tiempo y gestiona eventos retrasados a través de técnicas de *Watermarking*.
 3. **Almacenamiento Multicanal**: Un módulo robusto encargado de persistir los datos de manera concurrente en SQLite para consultas ágiles, en CSV para compatibilidad, y en formato columnar Parquet optimizado para análisis futuros.
 4. **Dashboard Interactivo**: Aplicación web construida con Flask y Server-Sent Events (SSE) para renderizar gráficos dinámicos en tiempo real sobre la temperatura, humedad, presión atmosférica y mapa de calor de 24 horas usando Chart.js.
-5. **Machine Learning Predictivo**: Script que extrae los datos históricos de SQLite y entrena algoritmos de Regresión Lineal y Random Forest para predecir la temperatura de Juliaca a partir de factores ambientales.
+5. **Machine Learning Predictivo**: Script que extrae los datos históricos de SQLite y entrena algoritmos de Random Forest y Gradient Boosting para predecir la temperatura de Juliaca a partir de factores ambientales.
 6. **Observabilidad Operativa (S8)**: Sistema continuo que monitoriza la latencia del pipeline, la tasa de errores y calcula la contrapresión (*backpressure*) en base al lag del offset en Kafka.
 
 ---

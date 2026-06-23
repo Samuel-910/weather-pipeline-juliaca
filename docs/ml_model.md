@@ -27,9 +27,8 @@ Para entrenar y evaluar el modelo, se recuperan los datos estructurados desde la
 
 Los datos se dividen aleatoriamente en un 80% para el conjunto de entrenamiento y un 20% para pruebas. Se entrenan dos tipos de regresores:
 
-### Regresión Lineal Múltiple (`LinearRegression`)
-Modela una relación lineal directa entre las variables temporales y la temperatura. 
-Debido a la disparidad de escalas entre la hora del día (0-23), el día de la semana (0-6), el mes (1-12) y la semana del año (1-53), se aplica **`StandardScaler`** para normalizar los datos a una escala con media 0 y varianza 1 antes de entrenar este regresor.
+### Gradient Boosting (`HistGradientBoostingRegressor`)
+Un algoritmo no lineal basado en un ensamble de árboles de decisión boosting estructurado de forma secuencial. Es altamente optimizado y rápido para entrenar en grandes volúmenes de datos. Al ser un modelo basado en árboles, captura curvas complejas de temperatura diaria y no requiere escalamiento previo de los datos (`StandardScaler`).
 
 ### Random Forest Regressor (`RandomForestRegressor`)
 Un algoritmo no lineal basado en un ensamble de árboles de decisión (configurado localmente con **50 árboles**). Este modelo es excelente para capturar interacciones complejas no lineales entre las variables temporales (por ejemplo, cómo influye la hora de la noche combinada con la estación/mes del año en el descenso de temperatura). No requiere escalado previo de datos.
