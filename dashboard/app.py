@@ -12,7 +12,7 @@ import json
 import time
 import queue
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict, deque
 from flask import Flask, render_template_string, jsonify, Response, stream_with_context, request
 from kafka import KafkaConsumer
@@ -45,57 +45,51 @@ lock = threading.Lock()
 estado_ml = {
     "entrenado": False,
     "error": "El modelo de ML aún no se ha inicializado.",
-    "mae_gb": None,
-    "r2_gb": None,
-    "mae_rf": None,
-    "r2_rf": None,
+    "mejor_modelo_nombre": None,
+    "mae_gb": None, "r2_gb": None,
+    "mae_rf": None, "r2_rf": None,
+    "mae_ridge": None, "r2_ridge": None,
+    "mae_knn": None, "r2_knn": None,
     "total_eventos": 0,
     "importancias": {},
-    "modelo_rf": None,
-    "modelo_gb": None,
+    "modelo_rf": None, "modelo_gb": None,
+    "modelo_ridge": None, "modelo_knn": None,
+    "mejor_modelo": None,
 }
 
 def entrenar_modelos_ml():
     global estado_ml
-    # Establecer mensaje descriptivo de entrenamiento en progreso
-    estado_ml["error"] = "El modelo se está entrenando en segundo plano con los últimos datos de SQLite. Por favor, espera unos segundos..."
-    print("[ML] Iniciando entrenamiento de modelos de temperatura...")
+    estado_ml["error"] = "Entrenando 4 modelos con juliaca_horario_real.csv..."
+    print("[ML] Iniciando entrenamiento de modelos...")
     try:
         import pandas as pd
-        import sqlite3
+        import os, pickle, json
         from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
+        from sklearn.linear_model import Ridge
+        from sklearn.neighbors import KNeighborsRegressor
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error, r2_score
         import numpy as np
 
-        db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'weather_juliaca.db')
-        if not os.path.exists(db_path):
+        csv_path = os.path.join(os.path.dirname(__file__), '..', 'ml', 'files', 'juliaca_horario_real.csv')
+        if not os.path.exists(csv_path):
             estado_ml["entrenado"] = False
-            estado_ml["error"] = "La base de datos SQLite no existe en el disco todavía."
+            estado_ml["error"] = "El CSV no existe."
             return
 
-        con = sqlite3.connect(db_path)
-        df = pd.read_sql(
-            """
-            SELECT timestamp, temperatura
-            FROM eventos
-            WHERE temperatura IS NOT NULL
-            ORDER BY timestamp
-            """,
-            con,
-        )
-        con.close()
-
+        df = pd.read_csv(csv_path)
+        df = df.dropna(subset=['temperatura', 'hora'])
         total = len(df)
         estado_ml["total_eventos"] = total
 
         if total < 20:
             estado_ml["entrenado"] = False
-            estado_ml["error"] = f"Se necesitan al menos 20 registros para entrenar. Actualmente hay {total} en la BD."
+            estado_ml["error"] = "Datos insuficientes"
             return
 
-        # Parsear variables temporales a partir de timestamp
-        df['dt'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert('America/Lima')
+        df['dt'] = pd.to_datetime(df['hora'], utc=True).dt.tz_convert('America/Lima')
         df['hora_dia'] = df['dt'].dt.hour
         df['dia_semana'] = df['dt'].dt.weekday
         df['mes'] = df['dt'].dt.month
@@ -105,65 +99,84 @@ def entrenar_modelos_ml():
         X = df[features].values
         y = df["temperatura"].values
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        gb = HistGradientBoostingRegressor(random_state=42)
-        gb.fit(X_train, y_train)
-        pred_gb = gb.predict(X_test)
-        
-        # Optimizado con n_jobs=-1 para entrenamiento paralelo veloz sobre millones de filas
+        ridge = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+        ridge.fit(X_train, y_train)
+        pred_ridge = ridge.predict(X_test)
+
         rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
         rf.fit(X_train, y_train)
         pred_rf = rf.predict(X_test)
 
-        mae_gb = mean_absolute_error(y_test, pred_gb)
-        r2_gb = r2_score(y_test, pred_gb)
-        mae_rf = mean_absolute_error(y_test, pred_rf)
-        r2_rf = r2_score(y_test, pred_rf)
+        gb = HistGradientBoostingRegressor(random_state=42)
+        gb.fit(X_train, y_train)
+        pred_gb = gb.predict(X_test)
+
+        knn = make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=5))
+        knn.fit(X_train, y_train)
+        pred_knn = knn.predict(X_test)
+
+        estado_ml["mae_ridge"] = round(float(mean_absolute_error(y_test, pred_ridge)), 2)
+        estado_ml["r2_ridge"] = round(float(r2_score(y_test, pred_ridge)), 3)
+        estado_ml["mae_rf"] = round(float(mean_absolute_error(y_test, pred_rf)), 2)
+        estado_ml["r2_rf"] = round(float(r2_score(y_test, pred_rf)), 3)
+        estado_ml["mae_gb"] = round(float(mean_absolute_error(y_test, pred_gb)), 2)
+        estado_ml["r2_gb"] = round(float(r2_score(y_test, pred_gb)), 3)
+        estado_ml["mae_knn"] = round(float(mean_absolute_error(y_test, pred_knn)), 2)
+        estado_ml["r2_knn"] = round(float(r2_score(y_test, pred_knn)), 3)
+
+        metricas_mae = {
+            "Ridge": estado_ml["mae_ridge"],
+            "RandomForest": estado_ml["mae_rf"],
+            "HistGradientBoosting": estado_ml["mae_gb"],
+            "KNN": estado_ml["mae_knn"]
+        }
+        mejor_nombre = min(metricas_mae, key=metricas_mae.get)
+        estado_ml["mejor_modelo_nombre"] = mejor_nombre
+        
+        if mejor_nombre == "Ridge": estado_ml["mejor_modelo"] = ridge
+        elif mejor_nombre == "RandomForest": estado_ml["mejor_modelo"] = rf
+        elif mejor_nombre == "HistGradientBoosting": estado_ml["mejor_modelo"] = gb
+        elif mejor_nombre == "KNN": estado_ml["mejor_modelo"] = knn
 
         importancias = {}
         for f, imp in zip(features, rf.feature_importances_):
             importancias[f] = round(float(imp), 3)
 
+        estado_ml["modelo_ridge"] = ridge
         estado_ml["modelo_rf"] = rf
         estado_ml["modelo_gb"] = gb
-        estado_ml["mae_gb"] = round(float(mae_gb), 2)
-        estado_ml["r2_gb"] = round(float(r2_gb), 3)
-        estado_ml["mae_rf"] = round(float(mae_rf), 2)
-        estado_ml["r2_rf"] = round(float(r2_rf), 3)
+        estado_ml["modelo_knn"] = knn
         estado_ml["importancias"] = importancias
         estado_ml["entrenado"] = True
         estado_ml["error"] = None
-        print(f"[ML] Modelos entrenados con éxito ({total} eventos). RF MAE={estado_ml['mae_rf']} R2={estado_ml['r2_rf']}")
 
-        # Guardar modelos y metadatos a disco para carga instantánea en el próximo arranque
-        import pickle
-        import json
         ml_dir = os.path.join(os.path.dirname(__file__), '..', 'ml')
         os.makedirs(ml_dir, exist_ok=True)
-        with open(os.path.join(ml_dir, 'modelo_rf.pkl'), 'wb') as f:
-            pickle.dump(rf, f)
-        with open(os.path.join(ml_dir, 'modelo_gb.pkl'), 'wb') as f:
-            pickle.dump(gb, f)
-            
+        with open(os.path.join(ml_dir, 'modelo_rf.pkl'), 'wb') as f: pickle.dump(rf, f)
+        with open(os.path.join(ml_dir, 'modelo_gb.pkl'), 'wb') as f: pickle.dump(gb, f)
+        with open(os.path.join(ml_dir, 'modelo_ridge.pkl'), 'wb') as f: pickle.dump(ridge, f)
+        with open(os.path.join(ml_dir, 'modelo_knn.pkl'), 'wb') as f: pickle.dump(knn, f)
+        
         meta = {
-            "mae_gb": estado_ml["mae_gb"],
-            "r2_gb": estado_ml["r2_gb"],
-            "mae_rf": estado_ml["mae_rf"],
-            "r2_rf": estado_ml["r2_rf"],
+            "mejor_modelo_nombre": estado_ml["mejor_modelo_nombre"],
+            "mae_gb": estado_ml["mae_gb"], "r2_gb": estado_ml["r2_gb"],
+            "mae_rf": estado_ml["mae_rf"], "r2_rf": estado_ml["r2_rf"],
+            "mae_ridge": estado_ml["mae_ridge"], "r2_ridge": estado_ml["r2_ridge"],
+            "mae_knn": estado_ml["mae_knn"], "r2_knn": estado_ml["r2_knn"],
             "total_eventos": estado_ml["total_eventos"],
             "importancias": estado_ml["importancias"]
         }
         with open(os.path.join(ml_dir, 'model_metadata.json'), 'w', encoding='utf-8') as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
-        print(f"[ML] Modelos y metadata persistidos en disco con éxito ({total} eventos).")
+        print(f"[ML] Modelos persistidos en disco. Mejor: {mejor_nombre}")
 
-    except ImportError:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         estado_ml["entrenado"] = False
-        estado_ml["error"] = "Librerías faltantes. Instala scikit-learn y pandas: pip install scikit-learn pandas"
-        print(f"[ML ERROR] {estado_ml['error']}")
+        estado_ml["error"] = f"Error: {str(e)}"
     except Exception as e:
         estado_ml["entrenado"] = False
         estado_ml["error"] = f"Error de entrenamiento: {str(e)}"
@@ -333,137 +346,86 @@ def stream():
 
 @app.route("/api/monitoreo-historial")
 def api_monitoreo_historial():
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'weather_juliaca.db')
-    if not os.path.exists(db_path):
-        return jsonify({"success": False, "error": "La base de datos SQLite no existe."}), 400
+    csv_path = os.path.join(os.path.dirname(__file__), '..', 'ml', 'files', 'juliaca_horario_real.csv')
+    if not os.path.exists(csv_path):
+        return jsonify({"success": False, "error": "El archivo CSV no existe."}), 400
 
     try:
         filtro = request.args.get("filtro", "hoy")  # hoy, semana, mes, anio
-        import sqlite3
-        con = sqlite3.connect(db_path)
-        cur = con.cursor()
-
+        import pandas as pd
+        
+        df = pd.read_csv(csv_path)
+        df['dt'] = pd.to_datetime(df['hora'])
+        # Simular que el CSV es datos recientes, así que ajustamos fechas al "now" para que los filtros funcionen
+        # Como es historico, el filtro "hoy" puede no coincidir con la fecha de la maquina.
+        # Mejor agrupar todo relativo al max fecha del df.
+        max_dt = df['dt'].max()
+        
         if filtro == "hoy":
-            query_datos = """
-                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
-                       AVG(temperatura) as temp,
-                       AVG(presion) as pres
-                FROM eventos
-                WHERE date(timestamp, 'localtime') = date('now', 'localtime')
-                GROUP BY hr
-                ORDER BY hr ASC
-            """
-            query_heatmap = """
-                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
-                       AVG(temperatura) as temp,
-                       COUNT(*) as cnt
-                FROM eventos
-                WHERE date(timestamp, 'localtime') = date('now', 'localtime')
-                GROUP BY hr
-                ORDER BY hr ASC
-            """
+            df_filt = df[df['dt'].dt.date == max_dt.date()]
+            grouped = df_filt.groupby(df_filt['dt'].dt.hour).agg({'temperatura': 'mean', 'presion': 'mean'}).reset_index()
+            labels = [f"{int(h)}h" for h in grouped['dt']]
+            temps = grouped['temperatura'].round(2).tolist()
+            presiones = grouped['presion'].round(2).tolist()
+            
+            heatmap_dict = {h: {"temp": None, "count": 0} for h in range(24)}
+            for _, r in df_filt.iterrows():
+                hr = r['dt'].hour
+                cnt = heatmap_dict[hr]["count"]
+                prev = heatmap_dict[hr]["temp"] or 0
+                heatmap_dict[hr]["temp"] = (prev * cnt + r['temperatura']) / (cnt + 1)
+                heatmap_dict[hr]["count"] = cnt + 1
+            
         elif filtro == "semana":
-            query_datos = """
-                SELECT date(timestamp, 'localtime') as dt,
-                       AVG(temperatura) as temp,
-                       AVG(presion) as pres
-                FROM eventos
-                WHERE timestamp >= datetime('now', '-7 days')
-                GROUP BY dt
-                ORDER BY dt ASC
-            """
-            query_heatmap = """
-                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
-                       AVG(temperatura) as temp,
-                       COUNT(*) as cnt
-                FROM eventos
-                WHERE timestamp >= datetime('now', '-7 days')
-                GROUP BY hr
-                ORDER BY hr ASC
-            """
+            min_dt = max_dt - pd.Timedelta(days=7)
+            df_filt = df[df['dt'] >= min_dt]
+            grouped = df_filt.groupby(df_filt['dt'].dt.date).agg({'temperatura': 'mean', 'presion': 'mean'}).reset_index()
+            labels = [f"{d.day}/{d.month}" for d in grouped['dt']]
+            temps = grouped['temperatura'].round(2).tolist()
+            presiones = grouped['presion'].round(2).tolist()
+            
+            heatmap_dict = {h: {"temp": None, "count": 0} for h in range(24)}
+            for hr, g in df_filt.groupby(df_filt['dt'].dt.hour):
+                heatmap_dict[hr]["temp"] = g['temperatura'].mean()
+                heatmap_dict[hr]["count"] = len(g)
+                
         elif filtro == "mes":
-            query_datos = """
-                SELECT date(timestamp, 'localtime') as dt,
-                       AVG(temperatura) as temp,
-                       AVG(presion) as pres
-                FROM eventos
-                WHERE timestamp >= datetime('now', '-30 days')
-                GROUP BY dt
-                ORDER BY dt ASC
-            """
-            query_heatmap = """
-                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
-                       AVG(temperatura) as temp,
-                       COUNT(*) as cnt
-                FROM eventos
-                WHERE timestamp >= datetime('now', '-30 days')
-                GROUP BY hr
-                ORDER BY hr ASC
-            """
+            min_dt = max_dt - pd.Timedelta(days=30)
+            df_filt = df[df['dt'] >= min_dt]
+            grouped = df_filt.groupby(df_filt['dt'].dt.date).agg({'temperatura': 'mean', 'presion': 'mean'}).reset_index()
+            labels = [f"{d.day}/{d.month}" for d in grouped['dt']]
+            temps = grouped['temperatura'].round(2).tolist()
+            presiones = grouped['presion'].round(2).tolist()
+            
+            heatmap_dict = {h: {"temp": None, "count": 0} for h in range(24)}
+            for hr, g in df_filt.groupby(df_filt['dt'].dt.hour):
+                heatmap_dict[hr]["temp"] = g['temperatura'].mean()
+                heatmap_dict[hr]["count"] = len(g)
+                
         elif filtro == "anio":
-            query_datos = """
-                SELECT strftime('%Y-%m', datetime(timestamp, 'localtime')) as mn,
-                       AVG(temperatura) as temp,
-                       AVG(presion) as pres
-                FROM eventos
-                WHERE timestamp >= datetime('now', '-365 days')
-                GROUP BY mn
-                ORDER BY mn ASC
-            """
-            query_heatmap = """
-                SELECT strftime('%H', datetime(timestamp, 'localtime')) as hr,
-                       AVG(temperatura) as temp,
-                       COUNT(*) as cnt
-                FROM eventos
-                WHERE timestamp >= datetime('now', '-365 days')
-                GROUP BY hr
-                ORDER BY hr ASC
-            """
+            # Agrupar por mes
+            df['mes_anio'] = df['dt'].dt.strftime('%Y-%m')
+            grouped = df.groupby('mes_anio').agg({'temperatura': 'mean', 'presion': 'mean'}).reset_index()
+            meses_nombres = {"01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr", "05": "May", "06": "Jun", "07": "Jul", "08": "Ago", "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic"}
+            labels = [f"{meses_nombres.get(m[-2:], m[-2:])} {m[:4]}" for m in grouped['mes_anio']]
+            temps = grouped['temperatura'].round(2).tolist()
+            presiones = grouped['presion'].round(2).tolist()
+            
+            heatmap_dict = {h: {"temp": None, "count": 0} for h in range(24)}
+            for hr, g in df.groupby(df['dt'].dt.hour):
+                heatmap_dict[hr]["temp"] = g['temperatura'].mean()
+                heatmap_dict[hr]["count"] = len(g)
         else:
-            con.close()
             return jsonify({"success": False, "error": f"Filtro desconocido: {filtro}"}), 400
 
-        cur.execute(query_datos)
-        rows = cur.fetchall()
-
-        labels = []
-        temps = []
-        presiones = []
-
-        meses_nombres = {
-            "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr",
-            "05": "May", "06": "Jun", "07": "Jul", "08": "Ago",
-            "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic"
-        }
-
-        for r in rows:
-            lbl = r[0]
-            if filtro == "hoy":
-                lbl = f"{int(lbl)}h"
-            elif filtro == "anio":
-                parts = lbl.split('-')
-                lbl = f"{meses_nombres.get(parts[1], parts[1])} {parts[0]}"
-            elif filtro in ["semana", "mes"]:
-                parts = lbl.split('-')
-                lbl = f"{parts[2]}/{parts[1]}"
-            
-            labels.append(lbl)
-            temps.append(round(r[1], 2) if r[1] is not None else 0.0)
-            presiones.append(round(r[2], 2) if r[2] is not None else 0.0)
-
-        cur.execute(query_heatmap)
-        rows_hm = cur.fetchall()
-        con.close()
-
-        heatmap_dict = {h: {"temp": None, "count": 0} for h in range(24)}
-        for r in rows_hm:
-            hr = int(r[0])
-            heatmap_dict[hr] = {
-                "temp": round(r[1], 2) if r[1] is not None else None,
-                "count": r[2]
-            }
-
-        heatmap_list = [{"h": h, **heatmap_dict[h]} for h in range(24)]
+        heatmap_list = []
+        for h in range(24):
+            t = heatmap_dict[h]["temp"]
+            heatmap_list.append({
+                "h": h,
+                "temp": round(t, 2) if pd.notnull(t) else None,
+                "count": heatmap_dict[h]["count"]
+            })
 
         return jsonify({
             "success": True,
@@ -474,6 +436,8 @@ def api_monitoreo_historial():
         })
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -485,10 +449,11 @@ def api_ml_info():
         "entrenado": estado_ml["entrenado"],
         "error": estado_ml["error"],
         "total_eventos": estado_ml["total_eventos"],
-        "mae_gb": estado_ml["mae_gb"],
-        "r2_gb": estado_ml["r2_gb"],
-        "mae_rf": estado_ml["mae_rf"],
-        "r2_rf": estado_ml["r2_rf"],
+        "mejor_modelo_nombre": estado_ml["mejor_modelo_nombre"],
+        "mae_gb": estado_ml["mae_gb"], "r2_gb": estado_ml["r2_gb"],
+        "mae_rf": estado_ml["mae_rf"], "r2_rf": estado_ml["r2_rf"],
+        "mae_ridge": estado_ml["mae_ridge"], "r2_ridge": estado_ml["r2_ridge"],
+        "mae_knn": estado_ml["mae_knn"], "r2_knn": estado_ml["r2_knn"],
         "importancias": estado_ml["importancias"]
     })
 
@@ -500,6 +465,7 @@ def api_ml_retrain():
         "entrenado": estado_ml["entrenado"],
         "error": estado_ml["error"],
         "total_eventos": estado_ml["total_eventos"],
+        "mejor_modelo_nombre": estado_ml["mejor_modelo_nombre"],
         "mae_rf": estado_ml["mae_rf"],
         "r2_rf": estado_ml["r2_rf"]
     })
@@ -519,10 +485,12 @@ def api_predict():
         import numpy as np
         X_in = np.array([[hora_dia, dia_semana, mes, semana_anio]])
 
+        mejor = estado_ml["mejor_modelo"]
         rf_model = estado_ml["modelo_rf"]
-        pred_rf = round(float(rf_model.predict(X_in)[0]), 2)
-
         gb_model = estado_ml["modelo_gb"]
+        
+        pred_mejor = round(float(mejor.predict(X_in)[0]), 2)
+        pred_rf = round(float(rf_model.predict(X_in)[0]), 2)
         pred_gb = round(float(gb_model.predict(X_in)[0]), 2)
 
         return jsonify({
@@ -534,6 +502,8 @@ def api_predict():
                 "semana_anio": semana_anio
             },
             "predicciones": {
+                "mejor_modelo": pred_mejor,
+                "mejor_modelo_nombre": estado_ml["mejor_modelo_nombre"],
                 "random_forest": pred_rf,
                 "gradient_boosting": pred_gb
             }
@@ -552,20 +522,20 @@ def api_predict_trend():
         hora_inicio = int(request.args.get("hora_inicio", 0))
         hora_fin = int(request.args.get("hora_fin", 23))
         
-        # Fecha base de la prediccion (ej. "2026-06-22")
         fecha_str = request.args.get("fecha", datetime.now().strftime("%Y-%m-%d"))
         fecha_base = datetime.strptime(fecha_str, "%Y-%m-%d")
         
-        # Calcular variables temporales base
-        dia_semana_base = (fecha_base.weekday()) % 7  # 0 Lunes, 6 Domingo
+        dia_semana_base = (fecha_base.weekday()) % 7
         mes_base = fecha_base.month
         semana_anio_base = fecha_base.isocalendar()[1]
         
         import numpy as np
+        mejor_model = estado_ml["mejor_modelo"]
         rf_model = estado_ml["modelo_rf"]
         gb_model = estado_ml["modelo_gb"]
+        ridge_model = estado_ml.get("modelo_ridge")
+        knn_model = estado_ml.get("modelo_knn")
         
-        # Validar horas
         hora_inicio = max(0, min(23, hora_inicio))
         hora_fin = max(0, min(23, hora_fin))
         if hora_inicio > hora_fin:
@@ -575,7 +545,6 @@ def api_predict_trend():
         n_horas = len(horas_rango)
         
         if modo == "dia":
-            # Variar horas en el rango seleccionado
             X_in = np.column_stack([
                 horas_rango,
                 np.full(n_horas, dia_semana_base),
@@ -584,91 +553,90 @@ def api_predict_trend():
             ])
             labels = [f"{h:02d}:00h" for h in horas_rango]
             
+            preds_mejor = mejor_model.predict(X_in).tolist()
             preds_rf = rf_model.predict(X_in).tolist()
             preds_gb = gb_model.predict(X_in).tolist()
             
         elif modo == "semana":
-            # 7 dias de la semana. Promedia predicciones en el rango horario
-            grid = np.array([[h, d, mes_base, semana_anio_base] for d in range(7) for h in horas_rango])
-            preds_rf_all = rf_model.predict(grid).reshape(7, n_horas)
-            preds_gb_all = gb_model.predict(grid).reshape(7, n_horas)
+            labels_semana = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            grid_list = []
+            labels = []
+            for i in range(7):
+                date_d = fecha_base + timedelta(days=i)
+                d = date_d.weekday()
+                labels.append(labels_semana[d])
+                for h in horas_rango:
+                    grid_list.append([h, d, date_d.month, date_d.isocalendar()[1]])
             
-            preds_rf = preds_rf_all.mean(axis=1).tolist()
-            preds_gb = preds_gb_all.mean(axis=1).tolist()
-            labels = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            grid = np.array(grid_list)
+            preds_mejor = mejor_model.predict(grid).reshape(7, n_horas).mean(axis=1).tolist()
+            preds_rf = rf_model.predict(grid).reshape(7, n_horas).mean(axis=1).tolist()
+            preds_gb = gb_model.predict(grid).reshape(7, n_horas).mean(axis=1).tolist()
+            if ridge_model: preds_ridge = ridge_model.predict(grid).reshape(7, n_horas).mean(axis=1).tolist()
+            if knn_model: preds_knn = knn_model.predict(grid).reshape(7, n_horas).mean(axis=1).tolist()
             
         elif modo == "mes":
-            # Dias del mes de la fecha seleccionada
-            import calendar
-            _, num_dias = calendar.monthrange(fecha_base.year, mes_base)
-            
             grid_list = []
-            for d in range(1, num_dias + 1):
-                date_d = datetime(fecha_base.year, mes_base, d)
-                weekday_d = date_d.weekday()
-                week_d = date_d.isocalendar()[1]
+            labels = []
+            for i in range(30):
+                date_d = fecha_base + timedelta(days=i)
+                d = date_d.weekday()
+                labels.append(f"{date_d.day}/{date_d.month}")
                 for h in horas_rango:
-                    grid_list.append([h, weekday_d, mes_base, week_d])
+                    grid_list.append([h, d, date_d.month, date_d.isocalendar()[1]])
                     
             grid = np.array(grid_list)
-            preds_rf_all = rf_model.predict(grid).reshape(num_dias, n_horas)
-            preds_gb_all = gb_model.predict(grid).reshape(num_dias, n_horas)
-            
-            preds_rf = preds_rf_all.mean(axis=1).tolist()
-            preds_gb = preds_gb_all.mean(axis=1).tolist()
-            labels = [f"Día {d}" for d in range(1, num_dias + 1)]
+            preds_mejor = mejor_model.predict(grid).reshape(30, n_horas).mean(axis=1).tolist()
+            preds_rf = rf_model.predict(grid).reshape(30, n_horas).mean(axis=1).tolist()
+            preds_gb = gb_model.predict(grid).reshape(30, n_horas).mean(axis=1).tolist()
+            if ridge_model: preds_ridge = ridge_model.predict(grid).reshape(30, n_horas).mean(axis=1).tolist()
+            if knn_model: preds_knn = knn_model.predict(grid).reshape(30, n_horas).mean(axis=1).tolist()
             
         elif modo == "anio":
-            # 12 meses. semanas de referencia:
             semanas_mes = [2, 6, 11, 15, 20, 24, 28, 33, 37, 41, 46, 50]
+            meses_nombres = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
             
             grid_list = []
-            for m in range(1, 13):
+            labels = []
+            for i in range(12):
+                m_calc = ((mes_base - 1 + i) % 12) + 1
+                labels.append(meses_nombres[m_calc - 1])
+                semana_m = semanas_mes[m_calc - 1]
                 for d in range(7):
                     for h in horas_rango:
-                        grid_list.append([h, d, m, semanas_mes[m-1]])
+                        grid_list.append([h, d, m_calc, semana_m])
                         
             grid = np.array(grid_list)
-            preds_rf_all = rf_model.predict(grid).reshape(12, 7 * n_horas)
-            preds_gb_all = gb_model.predict(grid).reshape(12, 7 * n_horas)
-            
-            preds_rf = preds_rf_all.mean(axis=1).tolist()
-            preds_gb = preds_gb_all.mean(axis=1).tolist()
-            labels = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+            preds_mejor = mejor_model.predict(grid).reshape(12, 7 * n_horas).mean(axis=1).tolist()
+            preds_rf = rf_model.predict(grid).reshape(12, 7 * n_horas).mean(axis=1).tolist()
+            preds_gb = gb_model.predict(grid).reshape(12, 7 * n_horas).mean(axis=1).tolist()
+            if ridge_model: preds_ridge = ridge_model.predict(grid).reshape(12, 7 * n_horas).mean(axis=1).tolist()
+            if knn_model: preds_knn = knn_model.predict(grid).reshape(12, 7 * n_horas).mean(axis=1).tolist()
         else:
             return jsonify({"success": False, "error": f"Modo desconocido: {modo}"}), 400
             
+        preds_mejor = [round(float(p), 2) for p in preds_mejor]
         preds_rf = [round(float(p), 2) for p in preds_rf]
         preds_gb = [round(float(p), 2) for p in preds_gb]
-        
-        # Estadísticas agregadas
-        avg_rf = round(float(np.mean(preds_rf)), 2)
-        min_rf = round(float(np.min(preds_rf)), 2)
-        max_rf = round(float(np.max(preds_rf)), 2)
-        
-        avg_gb = round(float(np.mean(preds_gb)), 2)
-        min_gb = round(float(np.min(preds_gb)), 2)
-        max_gb = round(float(np.max(preds_gb)), 2)
         
         return jsonify({
             "success": True,
             "inputs": {
-                "modo": modo,
-                "hora_inicio": hora_inicio,
-                "hora_fin": hora_fin,
-                "fecha": fecha_str,
-                "dia_semana_base": dia_semana_base,
-                "mes_base": mes_base,
-                "semana_anio_base": semana_anio_base
+                "modo": modo, "hora_inicio": hora_inicio, "hora_fin": hora_fin,
+                "fecha": fecha_str, "dia_semana_base": dia_semana_base,
+                "mes_base": mes_base, "semana_anio_base": semana_anio_base
             },
             "labels": labels,
+            "mejor_modelo_nombre": estado_ml["mejor_modelo_nombre"],
             "predicciones": {
+                "mejor_modelo": preds_mejor,
                 "random_forest": preds_rf,
                 "gradient_boosting": preds_gb
             },
             "stats": {
-                "random_forest": {"avg": avg_rf, "min": min_rf, "max": max_rf},
-                "gradient_boosting": {"avg": avg_gb, "min": min_gb, "max": max_gb}
+                "mejor_modelo": {"avg": round(float(np.mean(preds_mejor)), 2), "min": round(float(np.min(preds_mejor)), 2), "max": round(float(np.max(preds_mejor)), 2)},
+                "random_forest": {"avg": round(float(np.mean(preds_rf)), 2), "min": round(float(np.min(preds_rf)), 2), "max": round(float(np.max(preds_rf)), 2)},
+                "gradient_boosting": {"avg": round(float(np.mean(preds_gb)), 2), "min": round(float(np.min(preds_gb)), 2), "max": round(float(np.max(preds_gb)), 2)}
             }
         })
     except Exception as e:
@@ -683,28 +651,49 @@ def cargar_modelos_ml():
         ml_dir = os.path.join(os.path.dirname(__file__), '..', 'ml')
         path_rf = os.path.join(ml_dir, 'modelo_rf.pkl')
         path_gb = os.path.join(ml_dir, 'modelo_gb.pkl')
+        path_ridge = os.path.join(ml_dir, 'modelo_ridge.pkl')
+        path_knn = os.path.join(ml_dir, 'modelo_knn.pkl')
         path_meta = os.path.join(ml_dir, 'model_metadata.json')
 
         if os.path.exists(path_rf) and os.path.exists(path_gb) and os.path.exists(path_meta):
             print("[ML] Cargando modelos persistidos desde disco...")
-            with open(path_rf, 'rb') as f:
-                rf = pickle.load(f)
-            with open(path_gb, 'rb') as f:
-                gb = pickle.load(f)
-            with open(path_meta, 'r', encoding='utf-8') as f:
-                meta = json.load(f)
+            with open(path_rf, 'rb') as f: rf = pickle.load(f)
+            with open(path_gb, 'rb') as f: gb = pickle.load(f)
+            if os.path.exists(path_ridge):
+                with open(path_ridge, 'rb') as f: ridge = pickle.load(f)
+            else: ridge = None
+            if os.path.exists(path_knn):
+                with open(path_knn, 'rb') as f: knn = pickle.load(f)
+            else: knn = None
+            
+            with open(path_meta, 'r', encoding='utf-8') as f: meta = json.load(f)
 
             estado_ml["modelo_rf"] = rf
             estado_ml["modelo_gb"] = gb
-            estado_ml["mae_gb"] = meta["mae_gb"]
-            estado_ml["r2_gb"] = meta["r2_gb"]
-            estado_ml["mae_rf"] = meta["mae_rf"]
-            estado_ml["r2_rf"] = meta["r2_rf"]
-            estado_ml["importancias"] = meta["importancias"]
-            estado_ml["total_eventos"] = meta["total_eventos"]
+            estado_ml["modelo_ridge"] = ridge
+            estado_ml["modelo_knn"] = knn
+            
+            estado_ml["mejor_modelo_nombre"] = meta.get("mejor_modelo_nombre", "RandomForest")
+            mejor_nombre = estado_ml["mejor_modelo_nombre"]
+            if mejor_nombre == "Ridge" and ridge: estado_ml["mejor_modelo"] = ridge
+            elif mejor_nombre == "RandomForest" and rf: estado_ml["mejor_modelo"] = rf
+            elif mejor_nombre == "HistGradientBoosting" and gb: estado_ml["mejor_modelo"] = gb
+            elif mejor_nombre == "KNN" and knn: estado_ml["mejor_modelo"] = knn
+            else: estado_ml["mejor_modelo"] = rf
+
+            estado_ml["mae_gb"] = meta.get("mae_gb")
+            estado_ml["r2_gb"] = meta.get("r2_gb")
+            estado_ml["mae_rf"] = meta.get("mae_rf")
+            estado_ml["r2_rf"] = meta.get("r2_rf")
+            estado_ml["mae_ridge"] = meta.get("mae_ridge")
+            estado_ml["r2_ridge"] = meta.get("r2_ridge")
+            estado_ml["mae_knn"] = meta.get("mae_knn")
+            estado_ml["r2_knn"] = meta.get("r2_knn")
+            estado_ml["importancias"] = meta.get("importancias", {})
+            estado_ml["total_eventos"] = meta.get("total_eventos", 0)
             estado_ml["entrenado"] = True
             estado_ml["error"] = None
-            print(f"[ML] Modelos cargados exitosamente desde disco (entrenados con {meta['total_eventos']} eventos).")
+            print(f"[ML] Modelos cargados exitosamente desde disco. Mejor: {mejor_nombre}")
             return True
     except Exception as e:
         print(f"[ML ERROR] Error al cargar modelos persistidos: {str(e)}")
@@ -1018,16 +1007,15 @@ h1 i { color: var(--amber); }
           <option value="dia" selected>Día (Por Horas)</option>
           <option value="semana">Semana (Por Días)</option>
           <option value="mes">Mes (Por Días del Mes)</option>
-          <option value="anio">Año (Por Meses)</option>
         </select>
       </div>
 
-      <div class="form-group">
+      <div class="form-group" id="group-fecha">
         <div class="form-label">Fecha a Estimar</div>
         <input type="date" class="form-select" id="param-fecha">
       </div>
 
-      <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+      <div class="form-group" id="group-horas" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
         <div>
           <div class="form-label">Desde las</div>
           <select class="form-select" id="param-hora-inicio" onchange="updHras()"></select>
@@ -1065,21 +1053,11 @@ h1 i { color: var(--amber); }
 
       <div id="ml-visualizacion-grupo">
         <div class="ml-results">
-          <div class="ml-res-card rf">
-            <div class="ml-res-title"><i class="fa-solid fa-tree" style="color:var(--purple)"></i> Random Forest</div>
-            <div class="ml-res-val" id="pred-val-rf">—°C</div>
-            <div id="pred-sub-rf" style="font-size:11px; color:var(--text-muted); margin-bottom: 4px;">Modelo no-lineal (Ensamble)</div>
+          <div class="ml-res-card rf" style="background: var(--amber-bg); border-color: var(--amber);">
+            <div class="ml-res-title" style="color: var(--amber);"><i class="fa-solid fa-trophy"></i> Mejor Modelo: <span id="nombre-mejor-modelo"></span></div>
+            <div class="ml-res-val" id="pred-val-mejor" style="color: var(--amber);">—°C</div>
+            <div id="pred-sub-mejor" style="font-size:11px; color:var(--text-muted); margin-bottom: 4px;">Seleccionado automáticamente por menor error (MAE)</div>
           </div>
-          <div class="ml-res-card gb">
-            <div class="ml-res-title"><i class="fa-solid fa-chart-line" style="color:var(--green)"></i> Gradient Boosting</div>
-            <div class="ml-res-val" id="pred-val-gb">—°C</div>
-            <div id="pred-sub-gb" style="font-size:11px; color:var(--text-muted); margin-bottom: 4px;">Ensamble secuencial (HistGB)</div>
-          </div>
-        </div>
-
-        <h2><i class="fa-solid fa-chart-bar" style="color:var(--amber)"></i> Importancia del Factor Temporal (Random Forest)</h2>
-        <div class="feat-list" id="feat-list-box">
-          <!-- Dinámico -->
         </div>
 
         <h2 style="margin-top:24px;"><i class="fa-solid fa-circle-info" style="color:var(--blue)"></i> Precisión y Datos de Validación</h2>
@@ -1101,6 +1079,16 @@ h1 i { color: var(--amber); }
               <td style="color:var(--green); font-weight:700;">Gradient Boosting</td>
               <td id="metric-mae-gb">—</td>
               <td id="metric-r2-gb">—</td>
+            </tr>
+            <tr>
+              <td style="color:var(--blue); font-weight:700;">Ridge</td>
+              <td id="metric-mae-ridge">—</td>
+              <td id="metric-r2-ridge">—</td>
+            </tr>
+            <tr>
+              <td style="color:var(--red); font-weight:700;">KNN</td>
+              <td id="metric-mae-knn">—</td>
+              <td id="metric-r2-knn">—</td>
             </tr>
           </tbody>
         </table>
@@ -1156,50 +1144,47 @@ function initMLChart() {
       labels: [],
       datasets: [
         {
-          label: 'Random Forest',
+          label: 'Mejor Modelo',
           data: [],
-          borderColor: '#a855f7', // purple
-          backgroundColor: 'rgba(168, 85, 247, 0.1)',
+          borderColor: '#f59e0b',
+          backgroundColor: 'rgba(245, 158, 11, 0.1)',
           fill: true,
           tension: 0.4,
           borderWidth: 3,
           pointRadius: 4,
           pointHoverRadius: 6,
-          pointBackgroundColor: '#a855f7'
-        },
-        {
-          label: 'Gradient Boosting',
-          data: [],
-          borderColor: '#10b981', // green
-          backgroundColor: 'rgba(16, 185, 129, 0.05)',
-          tension: 0.4,
-          borderWidth: 2.5,
-          pointRadius: 3,
-          pointHoverRadius: 5,
-          pointBackgroundColor: '#10b981'
+          pointBackgroundColor: '#f59e0b'
         }
       ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      scales: {
-        x: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#94a3b8' }
-        },
-        y: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#94a3b8' },
-          title: { display: true, text: 'Temperatura (°C)', color: '#94a3b8' }
-        }
-      },
       plugins: {
-        legend: { labels: { color: '#f8fafc' } },
+        legend: { display: true, position: 'top', labels: { color: 'var(--text)', font: { size: 12, weight: '500' } } },
         tooltip: {
           mode: 'index',
-          intersect: false
+          intersect: false,
+          backgroundColor: 'rgba(15, 23, 42, 0.9)',
+          titleColor: '#f8fafc',
+          bodyColor: '#e2e8f0',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: { label: function(c) { return ' ' + c.dataset.label + ': ' + c.parsed.y + ' °C'; } }
         }
+      },
+      scales: {
+        x: { grid: { color: 'var(--border)' }, ticks: { color: 'var(--text-muted)' } },
+        y: {
+          title: { display: true, text: 'Temperatura (°C)', color: 'var(--text-muted)' },
+          grid: { color: 'var(--border)' },
+          ticks: { color: 'var(--text)' }
+        }
+      },
+      interaction: {
+        mode: 'index',
+        intersect: false
       }
     }
   });
@@ -1216,6 +1201,9 @@ document.addEventListener("DOMContentLoaded", () => {
       debounceCalcular();
     });
   }
+  
+  const modoSelect = document.getElementById('ml-chart-modo');
+  if (modoSelect) cambiarModoGrafico(modoSelect.value);
   
   // Poblar selectores de hora inicio y fin
   const startSel = document.getElementById('param-hora-inicio');
@@ -1255,6 +1243,12 @@ function updHras() {
 
 function cambiarModoGrafico(modo) {
   graficoModo = modo;
+  const grpHoras = document.getElementById('group-horas');
+  if (modo === 'dia') {
+    if (grpHoras) grpHoras.style.display = 'grid';
+  } else {
+    if (grpHoras) grpHoras.style.display = 'none';
+  }
   cachePredicciones = null; // Invalida caché al cambiar modo
   debounceCalcular();
 }
@@ -1299,17 +1293,26 @@ function cargarMLInfo() {
         visualDiv.style.display = 'block';
         if (chartContainer) chartContainer.style.display = 'block';
         
-        // Cargar métricas
         document.getElementById('metric-mae-rf').textContent = d.mae_rf + ' °C';
         document.getElementById('metric-r2-rf').textContent = d.r2_rf;
         document.getElementById('metric-mae-gb').textContent = d.mae_gb + ' °C';
         document.getElementById('metric-r2-gb').textContent = d.r2_gb;
-        document.getElementById('ml-total-txt').textContent = `Datos de entrenamiento: ${d.total_eventos} eventos históricos (80% entrenamiento, 20% test).`;
         
-        // Pintar importancias
+        let mRidge = document.getElementById('metric-mae-ridge');
+        if(mRidge) mRidge.textContent = d.mae_ridge + ' °C';
+        let r2Ridge = document.getElementById('metric-r2-ridge');
+        if(r2Ridge) r2Ridge.textContent = d.r2_ridge;
+        
+        let mKnn = document.getElementById('metric-mae-knn');
+        if(mKnn) mKnn.textContent = d.mae_knn + ' °C';
+        let r2Knn = document.getElementById('metric-r2-knn');
+        if(r2Knn) r2Knn.textContent = d.r2_knn;
+
+        document.getElementById('nombre-mejor-modelo').textContent = d.mejor_modelo_nombre;
+        document.getElementById('ml-total-txt').textContent = `Datos de entrenamiento: ${d.total_eventos} eventos históricos de CSV (80% entrenamiento, 20% test).`;
+        
         const box = document.getElementById('feat-list-box');
         box.innerHTML = '';
-        
         const sorted = Object.entries(d.importancias).sort((a,b) => b[1] - a[1]);
         sorted.forEach(([k, v]) => {
           const friendlyNames = {
@@ -1329,32 +1332,40 @@ function cargarMLInfo() {
             </div>
           `;
         });
-
         calcularPrediccion(true);
       }
     })
     .catch(() => {});
 }
 
+
 // Calcular Predicción de Temperatura
 function calcularPrediccion(silencioso = false) {
   const loading = document.getElementById('ml-loading');
   const alertDiv = document.getElementById('ml-alert-insuficiente');
-  if (alertDiv.style.display === 'block') return; // Si no hay datos suficientes, no calcula
+  if (alertDiv && alertDiv.style.display === 'block') return;
 
   const startSel = document.getElementById('param-hora-inicio');
   const endSel = document.getElementById('param-hora-fin');
-  const rawDate = document.getElementById('param-fecha').value;
+  let rawDate = document.getElementById('param-fecha').value;
   
-  if (!rawDate || !startSel || !endSel) {
-    if (!silencioso) loading.style.display = 'none';
+  let horaInicio = 0;
+  let horaFin = 23;
+
+  if (!rawDate) {
+    if (!silencioso && loading) loading.style.display = 'none';
     return;
   }
 
-  const horaInicio = parseInt(startSel.value);
-  const horaFin = parseInt(endSel.value);
+  if (graficoModo === 'dia') {
+    if (!startSel || !endSel) {
+      if (!silencioso && loading) loading.style.display = 'none';
+      return;
+    }
+    horaInicio = parseInt(startSel.value);
+    horaFin = parseInt(endSel.value);
+  }
 
-  // Clave única de caché
   const cacheKey = `${graficoModo}-${horaInicio}-${horaFin}-${rawDate}`;
 
   if (cachePredicciones && cachePredicciones.key === cacheKey) {
@@ -1362,8 +1373,9 @@ function calcularPrediccion(silencioso = false) {
     return;
   }
 
-  if (!silencioso) {
-    document.getElementById('ml-loading-txt').textContent = 'Calculando tendencia...';
+  if (!silencioso && loading) {
+    const txt = document.getElementById('ml-loading-txt');
+    if(txt) txt.textContent = 'Calculando tendencia...';
     loading.style.display = 'flex';
   }
 
@@ -1379,44 +1391,41 @@ function calcularPrediccion(silencioso = false) {
       }
     })
     .finally(() => {
-      if (!silencioso) loading.style.display = 'none';
+      if (!silencioso && loading) loading.style.display = 'none';
     });
 }
 
 function aplicarPredicciones(d) {
-  const predsRF = d.predicciones.random_forest;
-  const predsGB = d.predicciones.gradient_boosting;
+  const predsMejor = d.predicciones.mejor_modelo;
   const labels = d.labels;
 
   if (cML24hLine) {
     cML24hLine.data.labels = labels;
-    cML24hLine.data.datasets[0].data = predsRF;
-    cML24hLine.data.datasets[1].data = predsGB;
+    cML24hLine.data.datasets[0].label = `Mejor Modelo (${d.mejor_modelo_nombre})`;
+    cML24hLine.data.datasets[0].data = predsMejor;
     cML24hLine.update();
   }
 
   const start = d.inputs.hora_inicio;
   const end = d.inputs.hora_fin;
 
+  const setIfExist = (id, text) => {
+    let el = document.getElementById(id);
+    if(el) el.textContent = text;
+  };
+
   if (d.inputs.modo === 'dia') {
     if (start === end) {
-      document.getElementById('pred-val-rf').textContent = predsRF[0].toFixed(1) + ' °C';
-      document.getElementById('pred-val-gb').textContent = predsGB[0].toFixed(1) + ' °C';
-      document.getElementById('pred-sub-rf').textContent = 'Estimación horaria';
-      document.getElementById('pred-sub-gb').textContent = 'Estimación horaria';
+      setIfExist('pred-val-mejor', predsMejor[0].toFixed(1) + ' °C');
+      setIfExist('pred-sub-mejor', 'Estimación horaria');
     } else {
-      document.getElementById('pred-val-rf').textContent = d.stats.random_forest.avg.toFixed(1) + ' °C';
-      document.getElementById('pred-val-gb').textContent = d.stats.gradient_boosting.avg.toFixed(1) + ' °C';
-      document.getElementById('pred-sub-rf').textContent = `Promedio (Mín: ${d.stats.random_forest.min}° / Máx: ${d.stats.random_forest.max}°)`;
-      document.getElementById('pred-sub-gb').textContent = `Promedio (Mín: ${d.stats.gradient_boosting.min}° / Máx: ${d.stats.gradient_boosting.max}°)`;
+      setIfExist('pred-val-mejor', d.stats.mejor_modelo.avg.toFixed(1) + ' °C');
+      setIfExist('pred-sub-mejor', `Promedio (Mín: ${d.stats.mejor_modelo.min}° / Máx: ${d.stats.mejor_modelo.max}°)`);
     }
   } else {
-    document.getElementById('pred-val-rf').textContent = d.stats.random_forest.avg.toFixed(1) + ' °C';
-    document.getElementById('pred-val-gb').textContent = d.stats.gradient_boosting.avg.toFixed(1) + ' °C';
-    
+    setIfExist('pred-val-mejor', d.stats.mejor_modelo.avg.toFixed(1) + ' °C');
     const labelModo = d.inputs.modo === 'semana' ? 'semanal' : (d.inputs.modo === 'mes' ? 'mensual' : 'anual');
-    document.getElementById('pred-sub-rf').textContent = `Tendencia ${labelModo} (Mín: ${d.stats.random_forest.min}° / Máx: ${d.stats.random_forest.max}°)`;
-    document.getElementById('pred-sub-gb').textContent = `Tendencia ${labelModo} (Mín: ${d.stats.gradient_boosting.min}° / Máx: ${d.stats.gradient_boosting.max}°)`;
+    setIfExist('pred-sub-mejor', `Tendencia ${labelModo} (Mín: ${d.stats.mejor_modelo.min}° / Máx: ${d.stats.mejor_modelo.max}°)`);
   }
 }
 
