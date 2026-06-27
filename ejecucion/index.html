@@ -1,0 +1,1370 @@
+
+<!doctype html>
+<html lang="es" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentación técnica del pipeline de datos climáticos de Juliaca usando Kafka, Spark Streaming y Machine Learning.">
+      
+      
+        <meta name="author" content="Samuel-910">
+      
+      
+      
+        <link rel="prev" href="../observabilidad/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Guía de Ejecución - Weather Pipeline Juliaca</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#guia-de-ejecucion-y-despliegue" class="md-skip">
+          Saltar a contenido
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Cabecera">
+    <a href=".." title="Weather Pipeline Juliaca" class="md-header__button md-logo" aria-label="Weather Pipeline Juliaca" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Weather Pipeline Juliaca
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Guía de Ejecución
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="amber"  aria-label="Cambiar a modo claro"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Cambiar a modo claro" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="amber"  aria-label="Cambiar a modo oscuro"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Cambiar a modo oscuro" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Búsqueda" placeholder="Búsqueda" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Buscar">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Limpiar" aria-label="Limpiar" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Inicializando búsqueda
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Samuel-910/weather-pipeline-juliaca" title="Ir al repositorio" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Samuel-910/weather-pipeline-juliaca
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Pestañas" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Inicio
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../instalacion/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Instalación y Configuración
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../s6_kafka/" class="md-tabs__link">
+          
+  
+  
+  Componentes del Pipeline
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ml_model/" class="md-tabs__link">
+          
+  
+  
+  Modelado y Visualización
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../observabilidad/" class="md-tabs__link">
+          
+  
+  
+  Operaciones
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navegación" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Weather Pipeline Juliaca" class="md-nav__button md-logo" aria-label="Weather Pipeline Juliaca" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Weather Pipeline Juliaca
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Samuel-910/weather-pipeline-juliaca" title="Ir al repositorio" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Samuel-910/weather-pipeline-juliaca
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inicio
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../instalacion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Instalación y Configuración
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Componentes del Pipeline
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Componentes del Pipeline
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s6_kafka/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingesta (Kafka)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s7_spark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Procesamiento (Spark)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../almacenamiento/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Almacenamiento (SQLite/CSV/Parquet)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modelado y Visualización
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Modelado y Visualización
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ml_model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Machine Learning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dashboard en Vivo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operaciones
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operaciones
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observabilidad/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observabilidad y Monitoreo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guía de Ejecución
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guía de Ejecución
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Tabla de contenidos">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Tabla de contenidos
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#infraestructura-en-contenedores-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Infraestructura en Contenedores (Docker)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ejecucion-paso-a-paso" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ejecución Paso a Paso
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ejecución Paso a Paso">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#paso-1-crear-topico-en-kafka" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 1: Crear Tópico en Kafka
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-2-activar-entorno-virtual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 2: Activar Entorno Virtual
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-3-iniciar-el-productor-climatico" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 3: Iniciar el Productor Climático
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-4-lanzar-el-procesador-en-streaming-spark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 4: Lanzar el Procesador en Streaming (Spark)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-5-iniciar-monitor-de-observabilidad" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 5: Iniciar Monitor de Observabilidad
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-6-arrancar-el-dashboard-web" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 6: Arrancar el Dashboard Web
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-7-modelado-de-machine-learning-ml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 7: Modelado de Machine Learning (ML)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#automatizacion-en-windows-bat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatización en Windows (.bat)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Automatización en Windows (.bat)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-ejecucion-completa-run_pipelinebat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A. Ejecución Completa (run_pipeline.bat)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-ejecucion-de-spark-run_streamingbat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B. Ejecución de Spark (run_streaming.bat)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#despliegue-continuo-en-github-pages-cicd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Despliegue Continuo en GitHub Pages (CI/CD)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Despliegue Continuo en GitHub Pages (CI/CD)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuracion-en-github" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuración en GitHub
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Tabla de contenidos">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Tabla de contenidos
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#infraestructura-en-contenedores-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Infraestructura en Contenedores (Docker)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ejecucion-paso-a-paso" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ejecución Paso a Paso
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ejecución Paso a Paso">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#paso-1-crear-topico-en-kafka" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 1: Crear Tópico en Kafka
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-2-activar-entorno-virtual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 2: Activar Entorno Virtual
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-3-iniciar-el-productor-climatico" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 3: Iniciar el Productor Climático
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-4-lanzar-el-procesador-en-streaming-spark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 4: Lanzar el Procesador en Streaming (Spark)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-5-iniciar-monitor-de-observabilidad" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 5: Iniciar Monitor de Observabilidad
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-6-arrancar-el-dashboard-web" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 6: Arrancar el Dashboard Web
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#paso-7-modelado-de-machine-learning-ml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paso 7: Modelado de Machine Learning (ML)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#automatizacion-en-windows-bat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatización en Windows (.bat)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Automatización en Windows (.bat)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-ejecucion-completa-run_pipelinebat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A. Ejecución Completa (run_pipeline.bat)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-ejecucion-de-spark-run_streamingbat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B. Ejecución de Spark (run_streaming.bat)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#despliegue-continuo-en-github-pages-cicd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Despliegue Continuo en GitHub Pages (CI/CD)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Despliegue Continuo en GitHub Pages (CI/CD)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuracion-en-github" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuración en GitHub
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="guia-de-ejecucion-y-despliegue">Guía de Ejecución y Despliegue</h1>
+<p>Esta guía detalla los pasos para iniciar cada uno de los componentes de la arquitectura del <strong>Weather Pipeline Juliaca</strong>. Puedes optar por realizar la ejecución de forma manual (paso a paso en terminales independientes) o utilizar los scripts automatizados proporcionados.</p>
+<hr />
+<h2 id="infraestructura-en-contenedores-docker">Infraestructura en Contenedores (Docker)</h2>
+<p>El archivo <code>docker-compose.yml</code> en la raíz define los servicios del ecosistema:
+- <strong>Zookeeper</strong> (puerto <code>2181</code> interno)
+- <strong>Apache Kafka</strong> (puerto <code>9092</code> expuesto al host)
+- <strong>Prometheus</strong> (puerto <code>9090</code> para visualizar y evaluar reglas de alertas)
+- <strong>Kafka-UI</strong> (puerto <code>8080</code> para examinar de manera visual tópicos, offsets y mensajes en cola)
+- <strong>Grafana</strong> (puerto <code>3000</code> con el plugin de SQLite preinstalado)</p>
+<p>Levanta la infraestructura base ejecutando:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
+</span></code></pre></div></p>
+<hr />
+<h2 id="ejecucion-paso-a-paso">Ejecución Paso a Paso</h2>
+<p>Si deseas controlar la inicialización de forma manual para monitorear las salidas por consola, abre terminales distintas y ejecuta el siguiente orden secuencial:</p>
+<h3 id="paso-1-crear-topico-en-kafka">Paso 1: Crear Tópico en Kafka</h3>
+<p>Asegúrate de que Kafka esté arriba y ejecuta el script de inicialización:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>bash<span class="w"> </span>s6_kafka/create_topic.sh
+</span></code></pre></div></p>
+<h3 id="paso-2-activar-entorno-virtual">Paso 2: Activar Entorno Virtual</h3>
+<p>En cada nueva terminal de comandos que abras para ejecutar scripts en Python, recuerda activar el entorno virtual correspondiente:
+<div class="language-powershell highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c"># En Windows (PowerShell)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">.\</span><span class="n">venv</span><span class="p">\</span><span class="n">Scripts</span><span class="p">\</span><span class="n">Activate</span><span class="p">.</span><span class="n">ps1</span>
+</span></code></pre></div></p>
+<h3 id="paso-3-iniciar-el-productor-climatico">Paso 3: Iniciar el Productor Climático</h3>
+<p>El productor comenzará a realizar peticiones climáticas y a publicar eventos JSON en Kafka, además de exponer métricas Prometheus en el puerto <code>8000</code>:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>s6_kafka/producer.py
+</span></code></pre></div></p>
+<h3 id="paso-4-lanzar-el-procesador-en-streaming-spark">Paso 4: Lanzar el Procesador en Streaming (Spark)</h3>
+<p>Envía el job a Spark Streaming cargando dinámicamente el paquete de conexión con Kafka:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>spark-submit<span class="w"> </span>--packages<span class="w"> </span>org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0<span class="w"> </span>s7_spark/streaming_job.py
+</span></code></pre></div></p>
+<h3 id="paso-5-iniciar-monitor-de-observabilidad">Paso 5: Iniciar Monitor de Observabilidad</h3>
+<p>Arranca el script de métricas operativas de canal que computa el lag de offsets y la contrapresión:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>s8_observabilidad/metricas.py
+</span></code></pre></div></p>
+<h3 id="paso-6-arrancar-el-dashboard-web">Paso 6: Arrancar el Dashboard Web</h3>
+<p>Levanta el servidor Flask de visualización interactiva en tiempo real:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>dashboard/app.py
+</span></code></pre></div>
+Abre tu navegador e ingresa a: <a href="http://localhost:5000">http://localhost:5000</a>.</p>
+<h3 id="paso-7-modelado-de-machine-learning-ml">Paso 7: Modelado de Machine Learning (ML)</h3>
+<p>Una vez que hayas acumulado un mínimo de 20 a 50 eventos en la base de datos local, puedes entrenar y evaluar los modelos predictivos de temperatura ejecutando:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>ml/modelo_temperatura.py
+</span></code></pre></div></p>
+<hr />
+<h2 id="automatizacion-en-windows-bat">Automatización en Windows (<code>.bat</code>)</h2>
+<p>Para agilizar el flujo de trabajo en entornos de desarrollo Windows, se proporcionan dos scripts por lotes que configuran variables de entorno e inician terminales en segundo plano de manera automática:</p>
+<h3 id="a-ejecucion-completa-run_pipelinebat">A. Ejecución Completa (<code>run_pipeline.bat</code>)</h3>
+<p>Abre e inicializa secuencialmente las terminales de comandos CMD para cada uno de los componentes, aplicando retrasos inteligentes para garantizar que los brokers de Kafka y servicios de red estén listos antes de levantar los jobs:
+- Levanta Docker Compose.
+- Espera 10 segundos y crea el tópico.
+- Arranca el Productor de Clima.
+- Envía el Job de Spark.
+- Inicializa el monitor de observabilidad y métricas.
+- Inicia el Dashboard en tiempo real.
+- Corre la fase de Machine Learning.</p>
+<p>Para usarlo, haz doble clic sobre el archivo o ejecútalo desde tu consola:
+<div class="language-powershell highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">.\</span><span class="n">run_pipeline</span><span class="p">.</span><span class="n">bat</span>
+</span></code></pre></div></p>
+<h3 id="b-ejecucion-de-spark-run_streamingbat">B. Ejecución de Spark (<code>run_streaming.bat</code>)</h3>
+<p>Configura rápidamente las variables de entorno de Hadoop local (<code>winutils.exe</code>) en el <code>PATH</code> de la sesión y ejecuta de forma directa el Spark submit para depuración exclusiva del flujo analítico:
+<div class="language-powershell highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">.\</span><span class="n">run_streaming</span><span class="p">.</span><span class="n">bat</span>
+</span></code></pre></div></p>
+<hr />
+<h2 id="despliegue-continuo-en-github-pages-cicd">Despliegue Continuo en GitHub Pages (CI/CD)</h2>
+<p>El repositorio incluye un flujo de trabajo automatizado de GitHub Actions configurado en <a href="file:///d:/Big%20data/unidad%202/weather-pipeline-juliaca/.github/workflows/deploy.yml">.github/workflows/deploy.yml</a>. Cada vez que subas cambios (<code>git push</code>) a las ramas principales <code>main</code> o <code>master</code>, GitHub compilará automáticamente el sitio y lo publicará en GitHub Pages.</p>
+<h3 id="configuracion-en-github">Configuración en GitHub</h3>
+<p>Para que la automatización funcione correctamente, debes configurar los permisos de escritura del token en tu repositorio en GitHub:</p>
+<ol>
+<li>Ve a la página de tu repositorio en GitHub.</li>
+<li>Dirígete a <strong>Settings</strong> (Configuración) &gt; <strong>Actions</strong> &gt; <strong>General</strong>.</li>
+<li>Baja hasta la sección <strong>Workflow permissions</strong> (Permisos del flujo de trabajo).</li>
+<li>Selecciona la opción <strong>Read and write permissions</strong> (Permisos de lectura y escritura).</li>
+<li>Haz clic en <strong>Save</strong> (Guardar).</li>
+</ol>
+<p>Una vez configurado, las ejecuciones del workflow tendrán autorización para compilar el sitio y actualizar la rama de publicación <code>gh-pages</code> de manera transparente. Puedes monitorear las compilaciones desde la pestaña <strong>Actions</strong> de tu repositorio.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado al portapapeles", "clipboard.copy": "Copiar al portapapeles", "search.result.more.one": "1 m\u00e1s en esta p\u00e1gina", "search.result.more.other": "# m\u00e1s en esta p\u00e1gina", "search.result.none": "No se encontraron documentos", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Teclee para comenzar b\u00fasqueda", "search.result.term.missing": "Falta", "select.version": "Seleccionar versi\u00f3n"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
